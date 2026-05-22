@@ -493,7 +493,16 @@ def main():
     
     event_data = None
     if args.event_json:
-        event_data = json.loads(args.event_json)
+        try:
+            event_data = json.loads(args.event_json)
+        except json.JSONDecodeError:
+            # Fallback to ast.literal_eval for Python-like dict structures (handles single quotes or unescaped values)
+            import ast
+            try:
+                event_data = ast.literal_eval(args.event_json)
+            except Exception:
+                print("[Error] Failed to parse --event-json argument. Please verify the JSON syntax and quote escaping.")
+                raise
     elif args.event_file:
         with open(args.event_file, "r") as f:
             event_data = json.load(f)
