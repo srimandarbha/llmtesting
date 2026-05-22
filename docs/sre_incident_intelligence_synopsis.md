@@ -432,9 +432,10 @@ The JSON payload passed between agents contains the following structure:
 * **Operational Value**: Minimizes operational risk by restricting automated changes based on cluster criticality, confidence thresholds, and system policy.
 * **Logic & Input**: Evaluates the gathered `operational_history` and `remediation_plan`.
 * **Decision Policies**:
+  - **Reoccurrence & LLM Evaluation**: If the alert has recurred frequently (e.g., >= 5 occurrences in the last 7 days), the agent queries the cognitive LLM to determine if the proposed automated remediation plan is unlikely to fix the underlying issue permanently. If the LLM decides it won't resolve the root cause, the incident is escalated to the human queue (`manual_action`). If the LLM is offline, a rule-based fallback heuristic is applied.
   - **Critical Environment Isolation**: If `cluster_environment == 'production'` and `risk_level != 'low'`, force `action_type = 'manual_action'`.
-  - **Confidence Guardrail**: If `confidence_score < 0.80`, force `action_type = 'manual_action'`.
-  - **Auto-Remediation Check**: If environment is staging/development or the alert is pre-approved for automation (e.g. etcd compaction on low disk space), set `action_type = 'auto_remediate'`.
+  - **Confidence Guardrail**: If `confidence_score < 0.70`, force `action_type = 'manual_action'`.
+  - **Auto-Remediation Check**: If the environment is staging/development and the alert is not escalated by the reoccurrence or confidence policies, set `action_type = 'auto_remediate'`.
 * **Output Mutations**: Writes `routing_decision` containing the execution path, target queue, and logical reasoning.
 
 ### Design for Future Scalability
