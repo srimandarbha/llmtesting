@@ -115,6 +115,8 @@ def main():
             target = intent.get("target")
             namespace = intent.get("namespace")
             
+            intent["alert_summary"] = final_state.get("final_output", {}).get("alert_summary", "")
+            
             print(f"[Execution Engine] Running strictly typed intent: {action} on {target} in {namespace}")
             # Mocking the ansible command output
             ansible_cmd = f"ansible-playbook ansible_playbooks/remediate.yml --extra-vars '{json.dumps(intent)}'"
@@ -156,6 +158,9 @@ def main():
             except Exception as db_err:
                 print(f"[Database Error] Failed to log error state: {db_err}")
 
+    print(f"\n[ServiceNow] Mocking REST API call to update SNOW Incident Work Notes...")
+    print(f"[ServiceNow] Attached {len(final_state.get('final_output', {}).get('alert_summary', ''))} bytes of AI diagnostic summary to ticket {final_state.get('correlation_id', 'unknown')}.")
+    
     # Output final state payload
     print("\nFINAL MULTI-AGENT STATE TRANSITION JSON:\n")
     print(json.dumps(final_state, indent=2, default=str))
