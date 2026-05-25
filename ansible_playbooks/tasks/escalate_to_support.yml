@@ -1,0 +1,15 @@
+---
+- name: Automate Support Escalation
+  ansible.builtin.debug:
+    msg: "MOCK: Opened RedHat Support Case for target {{ target }} in namespace {{ namespace }}."
+
+- name: Write ticket data to log
+  ansible.builtin.copy:
+    dest: escalate_log.txt
+    content: |
+      [{{ ansible_date_time.iso8601 }}] Created Support Case for {{ target }} in {{ namespace }}
+      
+      Diagnostic Data:
+      {{ alert_summary | default("No summary provided.") }}
+      
+      ----------------

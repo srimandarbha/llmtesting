@@ -4,7 +4,9 @@ import sys
 import logging
 import requests
 import psycopg2
+# pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
+from agents.config import DATABASE_TARGET, LLM_API_URL, EMBED_MODEL_NAME
 
 # Silence Hugging Face logging noise completely
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
@@ -16,19 +18,13 @@ logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 class OpenShiftSREAgent:
     def __init__(self):
         # Your persistent session database credentials applied automatically
-        self.db_config = {
-            "dbname": "rhokp",
-            "user": "postgres",
-            "password": "postgres",
-            "host": "localhost",
-            "port": "5432"
-        }
+        self.db_config = DATABASE_TARGET
         # 1. Your Local Retrieval Layer (all-MiniLM-L6-v2)
         print("Loading local semantic vector layers...", file=sys.stderr)
-        self.embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.embed_model = SentenceTransformer(EMBED_MODEL_NAME)
         
         # 2. FIX: OpenAI-compatible Endpoint hosted natively by llama.cpp
-        self.llm_v1_url = "http://127.0.0.1:8080/v1/chat/completions"
+        self.llm_v1_url = LLM_API_URL
 
     def get_raw_rag_context(self, user_input):
         """Your existing pgvector search logic to pull ground-truth runbooks"""
@@ -91,12 +87,14 @@ class OpenShiftSREAgent:
 
 # --- RUNTIME EXECUTION ---
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Query RAG and invoke SRE Agent")
+    parser.add_argument("--query", type=str, required=True, help="The query string to search for")
+    args = parser.parse_args()
+
     agent = OpenShiftSREAgent()
     
-    # Run a test matching your previous alert conditions
-    sample_query = "CoreDNSErrorsHigh alert is firing. How do I troubleshoot and resolve this on my cluster?"
-    
-    final_solution = agent.invoke_sre_agent(sample_query)
+    final_solution = agent.invoke_sre_agent(args.query)
     print("\n" + "="*70)
     print("FINAL CONTEXT-GROUNDED SRE REMEDIATION INSTRUCTION:")
     print("="*70)

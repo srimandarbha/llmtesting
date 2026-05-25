@@ -1,0 +1,8 @@
+---
+- name: Execute Resource Patch
+  ansible.builtin.debug:
+    msg: "MOCK: Executing 'oc patch' on {{ target }} in namespace {{ namespace }} to apply configuration hotfixes."
+
+- name: Verify Patch State
+  ansible.builtin.debug:
+    msg: "MOCK: Verified target configuration has successfully converged to desired state."

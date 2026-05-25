@@ -142,7 +142,7 @@ class OpenShiftRunbookIngestionEngine:
             CREATE TABLE IF NOT EXISTS rhokp_knowledge (
                 id SERIAL PRIMARY KEY,
                 rhokp_id VARCHAR(100),       -- Holds the dynamic Alert Name string
-                title TEXT,                  -- Human-friendly runbook label
+                namespace VARCHAR(100),      -- Operator/Namespace label
                 section_type VARCHAR(30),    -- 'meaning', 'diagnosis', 'mitigation'
                 raw_text TEXT,               
                 embedding vector(384)
@@ -150,7 +150,7 @@ class OpenShiftRunbookIngestionEngine:
         """)
         # Ensure unique constraint exists for upsert capability
         cur.execute("""
-            SELECT count(*) FROM pg_constraint WHERE conname = 'unique_alert_section_title';
+            SELECT count(*) FROM pg_constraint WHERE conname = 'unique_alert_section_namespace';
         """)
         if cur.fetchone()[0] == 0:
             # Delete duplicates first to avoid errors when creating constraint
@@ -160,11 +160,11 @@ class OpenShiftRunbookIngestionEngine:
                 WHERE a.id < b.id 
                   AND a.rhokp_id = b.rhokp_id 
                   AND a.section_type = b.section_type 
-                  AND a.title = b.title;
+                  AND a.namespace = b.namespace;
             """)
             cur.execute("""
                 ALTER TABLE rhokp_knowledge 
-                ADD CONSTRAINT unique_alert_section_title UNIQUE (rhokp_id, section_type, title);
+                ADD CONSTRAINT unique_alert_section_namespace UNIQUE (rhokp_id, section_type, namespace);
             """)
             
         cur.execute("""
@@ -220,11 +220,11 @@ class OpenShiftRunbookIngestionEngine:
                 
                 # Write row out into pgvector with UPSERT
                 cur.execute("""
-                    INSERT INTO rhokp_knowledge (rhokp_id, title, section_type, raw_text, embedding)
+                    INSERT INTO rhokp_knowledge (rhokp_id, namespace, section_type, raw_text, embedding)
                     VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (rhokp_id, section_type, title)
+                    ON CONFLICT (rhokp_id, section_type, namespace)
                     DO UPDATE SET raw_text = EXCLUDED.raw_text, embedding = EXCLUDED.embedding;
-                """, (alert_name, f"{alert_name} Runbook Documentation ({operator_name})", section_name, enriched_chunk_text, vector_coord))
+                """, (alert_name, operator_name, section_name, enriched_chunk_text, vector_coord))
 
         conn.commit()
         cur.close()
@@ -284,11 +284,11 @@ class OpenShiftRunbookIngestionEngine:
                     
                     # Write row out into pgvector with UPSERT
                     cur.execute("""
-                        INSERT INTO rhokp_knowledge (rhokp_id, title, section_type, raw_text, embedding)
+                        INSERT INTO rhokp_knowledge (rhokp_id, namespace, section_type, raw_text, embedding)
                         VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (rhokp_id, section_type, title)
+                        ON CONFLICT (rhokp_id, section_type, namespace)
                         DO UPDATE SET raw_text = EXCLUDED.raw_text, embedding = EXCLUDED.embedding;
-                    """, (alert_name, f"{alert_name} Runbook Documentation ({operator_name})", section_name, enriched_chunk_text, vector_coord))
+                    """, (alert_name, operator_name, section_name, enriched_chunk_text, vector_coord))
                 
                 # Commit periodically (e.g. every 10 files) or at the end
                 if idx % 10 == 0:
