@@ -1,0 +1,29 @@
+---
+# tasks/scale_deployment.yml
+# Scales a deployment to handle load or clear degraded states
+
+- name: Retrieve current deployment scale
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ target }}"
+    namespace: "{{ namespace }}"
+  register: deploy_info
+
+- name: Fail if deployment does not exist
+  ansible.builtin.fail:
+    msg: "Deployment {{ target }} not found in namespace {{ namespace }}"
+  when: deploy_info.resources | length == 0
+
+- name: Scale up deployment
+  kubernetes.core.k8s_scale:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ target }}"
+    namespace: "{{ namespace }}"
+    replicas: 3
+    wait: yes
+
+- name: Confirm scale success
+  ansible.builtin.debug:
+    msg: "Deployment {{ target }} successfully scaled to 3 replicas."

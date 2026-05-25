@@ -126,7 +126,8 @@ class GatekeeperDeciderAgent(BaseSreAgent):
                         f"Cluster is production and remediation risk level is {risk.upper()}. "
                         f"Auto-remediation of medium/high risk alerts is restricted in prod."
                     )
-            elif confidence < 0.70:
+            
+            if not escalate_to_human and confidence < 0.70:
                 escalate_to_human = True
                 reasoning_parts.append(f"LLM confidence score ({confidence:.2%}) is below the automation gate (70%).")
 

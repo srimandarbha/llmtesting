@@ -29,17 +29,26 @@ class RAGRecommenderAgent(BaseSreAgent):
         cur = conn.cursor()
         
         alertname = state["alertname"]
-        short_desc = f"Alert '{alertname}' firing in namespace '{state['namespace']}'"
+        short_desc = f"Alert '{alertname}' firing in namespace '{state['namespace']}' on host '{state.get('hostname', 'unknown')}'"
         query_vector = self.embed_model.encode(short_desc).tolist()
         
-        # Query closest playbooks and incident resolutions with a distance threshold
+        # Query closest playbooks, incident resolutions, and official runbooks using HYBRID SEARCH
+        search_keyword = f"%{alertname}%"
         cur.execute("""
-            SELECT source_id, source_table, text_chunk, (embedding <-> %s::vector) AS distance
-            FROM operational_knowledge_embeddings
-            WHERE (embedding <-> %s::vector) < 0.75
-            ORDER BY embedding <-> %s::vector
+            SELECT * FROM (
+                SELECT source_id, source_table, text_chunk, 
+                       CASE WHEN source_id ILIKE %s THEN (embedding <-> %s::vector) - 0.4 ELSE (embedding <-> %s::vector) END AS distance
+                FROM operational_knowledge_embeddings
+                WHERE (embedding <-> %s::vector) < 0.75
+                UNION ALL
+                SELECT rhokp_id AS source_id, section_type AS source_table, raw_text AS text_chunk, 
+                       CASE WHEN rhokp_id ILIKE %s THEN (embedding <-> %s::vector) - 0.4 ELSE (embedding <-> %s::vector) END AS distance
+                FROM rhokp_knowledge
+                WHERE (embedding <-> %s::vector) < 0.75
+            ) AS combined_results
+            ORDER BY distance
             LIMIT 2;
-        """, (query_vector, query_vector, query_vector))
+        """, (search_keyword, query_vector, query_vector, query_vector, search_keyword, query_vector, query_vector, query_vector))
         
         rows = cur.fetchall()
         cur.close()
@@ -73,6 +82,7 @@ class RAGRecommenderAgent(BaseSreAgent):
             "You are an OpenShift SRE Assistant.\n"
             "Using ONLY the context below, output a strictly typed JSON object representing the remediation intent.\n"
             "The JSON must have this exact structure: {\"action\": \"restart_pod|delete_pvc|scale_deployment\", \"namespace\": \"...\", \"target\": \"...\"}\n"
+            "For the 'target' field, you MUST use the specific host or object name provided in the ALERT, rather than generic terms from the context.\n"
             "Do NOT output any raw bash commands, explanations, or markdown formatting."
         )
         user_prompt = f"VERIFIED CONTEXT:\n{context_str}\n\nALERT:\n{short_desc}"
@@ -84,11 +94,19 @@ class RAGRecommenderAgent(BaseSreAgent):
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.2
-            }, timeout=5)
+            }, timeout=45)
             if response.status_code == 200:
                 proposed_action = response.json()["choices"][0]["message"]["content"].strip()
-        except Exception:
-            pass
+                # Clean up any markdown code blocks the LLM might have added
+                if proposed_action.startswith("```json"):
+                    proposed_action = proposed_action[7:]
+                elif proposed_action.startswith("```"):
+                    proposed_action = proposed_action[3:]
+                if proposed_action.endswith("```"):
+                    proposed_action = proposed_action[:-3]
+                proposed_action = proposed_action.strip()
+        except Exception as e:
+            print(f"[{self.name}] LLM API Call Error: {e}")
 
         if not proposed_action:
             # Fallback deterministic structured JSON
