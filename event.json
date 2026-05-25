@@ -1,0 +1,8 @@
+{
+  "cluster": "emclu202",
+  "hostname": "emclu202.prod.openshift.com",
+  "correlation_id": "test-3455",
+  "namespace": "openshift-monitoring",
+  "startAt": "2026-05-25T14:30:00Z",
+  "alertname": "AlertmanagerClusterFailedToSendAlerts"
+}

@@ -4,7 +4,9 @@ import sys
 import logging
 import argparse
 import psycopg2
+# pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
+from agents.config import DATABASE_TARGET, EMBED_MODEL_NAME
 
 # Silence diagnostics
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
@@ -15,15 +17,9 @@ logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 
 class RAGQueryClient:
     def __init__(self):
-        self.db_config = {
-            "dbname": "rhokp",
-            "user": "postgres",
-            "password": "postgres",
-            "host": "localhost",
-            "port": "5432"
-        }
-        print("Loading local semantic embedding layers (all-MiniLM-L6-v2)...", file=sys.stderr)
-        self.embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.db_config = DATABASE_TARGET
+        print(f"Loading local semantic embedding layers ({EMBED_MODEL_NAME})...", file=sys.stderr)
+        self.embed_model = SentenceTransformer(EMBED_MODEL_NAME)
 
     def fetch_kb_context(self, user_input):
         """
@@ -104,8 +100,8 @@ class RAGQueryClient:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RHOKP pgvector RAG CLI Query Client Tool")
-    group = parser.add_mutually_exclusive_group(required=False)
-    group.add_argument("-a", "--alertname", type=str, default="CollectorNodeDown", help="Target alertname token to search")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("-a", "--alertname", type=str, help="Target alertname token to search")
     group.add_argument("-i", "--interactive", action="store_true", help="Launch interactive REPL shell")
 
     args = parser.parse_args()

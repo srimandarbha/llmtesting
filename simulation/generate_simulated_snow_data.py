@@ -5,6 +5,7 @@ import random
 import json
 from datetime import datetime, timedelta
 import psycopg2
+# pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
 
 # Silence Hugging Face warnings
@@ -64,9 +65,11 @@ def create_schemas(conn):
         CREATE TABLE IF NOT EXISTS clusters (
             cluster_id VARCHAR(50) PRIMARY KEY,
             name VARCHAR(100) NOT NULL,
+            description VARCHAR(200),
             openshift_version VARCHAR(20) NOT NULL,
             environment VARCHAR(20) NOT NULL CHECK (environment IN ('production', 'staging', 'development', 'dr'))
         );
+        ALTER TABLE clusters ADD COLUMN IF NOT EXISTS description VARCHAR(200);
         CREATE INDEX IF NOT EXISTS idx_clusters_env ON clusters(environment);
     """)
     
@@ -209,17 +212,17 @@ def generate_mock_data(conn):
     
     # 1. Clusters (5 clusters)
     clusters_data = [
-        ("prod-us-east-1", "Production US East", "4.14.12", "production"),
-        ("prod-us-west-2", "Production US West", "4.14.12", "production"),
-        ("staging-us-east-1", "Staging US East", "4.15.2", "staging"),
-        ("dev-us-east-1", "Development US East", "4.16.0-rc2", "development"),
-        ("dr-us-west-1", "Disaster Recovery West", "4.14.12", "dr")
+        ("nzclu101", "nzclu101", "Production New Zealand", "4.14.12", "production"),
+        ("emclu202", "emclu202", "Production Emirates", "4.14.12", "production"),
+        ("auclo303", "auclo303", "Staging Australia", "4.15.2", "staging"),
+        ("inclu404", "inclu404", "Development India", "4.16.0-rc2", "development"),
+        ("nzclu102", "nzclu102", "Disaster Recovery New Zealand", "4.14.12", "dr")
     ]
     
     print("Inserting clusters...")
     cur.executemany("""
-        INSERT INTO clusters (cluster_id, name, openshift_version, environment)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO clusters (cluster_id, name, description, openshift_version, environment)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (cluster_id) DO NOTHING;
     """, clusters_data)
     
@@ -240,7 +243,7 @@ def generate_mock_data(conn):
     alert_occurrences = []
     base_time = datetime.now() - timedelta(days=12)
     
-    for cluster_id, _, _, _ in clusters_data:
+    for cluster_id, _, _, _, _ in clusters_data:
         # Assign 4-6 random alert profiles to each cluster
         selected_profiles = random.sample(alert_profiles, k=random.randint(4, 6))
         for alertname, namespace, operator_component, severity in selected_profiles:
@@ -250,7 +253,7 @@ def generate_mock_data(conn):
             last_seen = datetime.now() - timedelta(minutes=random.randint(5, 120))
             
             # Decide if active based on environment and profile
-            active = random.choice([True, False]) if cluster_id != "dev-us-east-1" else True
+            active = random.choice([True, False]) if cluster_id != "inclu404" else True
             
             alert_occurrences.append((
                 fingerprint, alertname, namespace, operator_component, cluster_id,
@@ -470,6 +473,10 @@ def generate_mock_data(conn):
         last_note_text = notes[-1]["text"] if notes else short_desc
         sent_lbl, sent_scr = analyze_sentiment(last_note_text)
         
+        # Determine hostname based on cluster location pattern
+        loc = cluster_id[:2] if len(cluster_id) >= 2 else "nz"
+        hostname = f"{loc}o{random.randint(10000, 99999)}"
+        
         # Build Raw JSON Payload
         raw_payload = {
             "sys_id": sys_id,
@@ -479,6 +486,7 @@ def generate_mock_data(conn):
             "sys_updated_on": updated_time.strftime("%Y-%m-%d %H:%M:%S"),
             "short_description": short_desc,
             "u_cluster_id": cluster_id,
+            "u_hostname": hostname,
             "u_alert_name": alertname,
             "u_namespace": namespace,
             "u_operator": operator_component,

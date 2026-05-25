@@ -272,13 +272,6 @@ CREATE TABLE IF NOT EXISTS operational_knowledge_embeddings (
 CREATE INDEX IF NOT EXISTS idx_vector_hnsw ON operational_knowledge_embeddings USING hnsw (embedding vector_l2_ops) WITH (m = 16, ef_construction = 64);
 ```
 
-### Architectural Critique of Alternative Databases
-
-- **MongoDB (Document-Store)**: Incapable of managing high-performance relational joins between alerts, incidents, cases, and snapshots. Aggregation lookup pipelines are slow and fail to enforce strict foreign key constraints.
-- **Elasticsearch (Search Engine)**: Not transactional. Lacks referential constraints, making it highly inefficient for heavy concurrent upsert loads.
-- **Pinecone / Weaviate (Vector-Only)**: Creates a split-database architecture. It is impossible to join transactional metadata (e.g. *“find similar resolution notes where environment was production AND reopen_count = 0”*) in a single query, leading to duplicate storage and synchronization lag.
-- **PostgreSQL (relational + pgvector)**: **The ideal choice.** Storing metrics, JSON payloads, and dense vector embeddings within a single ACID-compliant database enables fast, unified SQL queries joining relational constraints with vector similarity searches.
-
 ---
 
 ## 5. Low-Level Sentiment Analysis Engine

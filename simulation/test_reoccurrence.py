@@ -21,7 +21,7 @@ def main():
     cur = conn.cursor()
     
     # Define test parameters
-    cluster_id = "staging-us-east-1"
+    cluster_id = "auclu303"
     alertname = "CoreDNSErrorsHigh"
     namespace = "openshift-dns"
     operator_component = "cluster-dns-operator"
@@ -35,7 +35,7 @@ def main():
         INSERT INTO clusters (cluster_id, name, openshift_version, environment)
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (cluster_id) DO NOTHING;
-    """, (cluster_id, "Staging US East", "4.15.2", "staging"))
+    """, (cluster_id, "Staging Australia", "4.15.2", "staging"))
     
     # Ensure alert occurrence exists
     cur.execute("""
@@ -80,7 +80,7 @@ def main():
     # 3. Execute the blackboard orchestrator with the event JSON
     event_data = {
         "cluster": cluster_id,
-        "hostname": "dns-node-01.staging-us-east-1.openshift.com",
+        "hostname": "auo12345",
         "correlation_id": "test-correlation-reoccur",
         "namespace": namespace,
         "startAt": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
