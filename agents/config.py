@@ -12,8 +12,8 @@ def get_env_or_fail(var_name, default=None, required=True):
 DB_HOST = get_env_or_fail("DB_HOST", default="localhost", required=False)
 DB_PORT = get_env_or_fail("DB_PORT", default="5432", required=False)
 DB_NAME = get_env_or_fail("DB_NAME", default="rhokp", required=False)
-DB_USER = get_env_or_fail("DB_USER", default="postgres", required=True)
-DB_PASSWORD = get_env_or_fail("DB_PASSWORD", default="postgres", required=True)
+DB_USER = get_env_or_fail("DB_USER", required=True)
+DB_PASSWORD = get_env_or_fail("DB_PASSWORD", required=True)
 
 DATABASE_TARGET = {
     "dbname": DB_NAME,
