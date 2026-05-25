@@ -39,16 +39,15 @@ class RAGRecommenderAgent(BaseSreAgent):
                 SELECT source_id, source_table, text_chunk, 
                        CASE WHEN source_id ILIKE %s THEN (embedding <-> %s::vector) - 0.4 ELSE (embedding <-> %s::vector) END AS distance
                 FROM operational_knowledge_embeddings
-                WHERE (embedding <-> %s::vector) < 0.75
                 UNION ALL
                 SELECT rhokp_id AS source_id, section_type AS source_table, raw_text AS text_chunk, 
                        CASE WHEN rhokp_id ILIKE %s THEN (embedding <-> %s::vector) - 0.4 ELSE (embedding <-> %s::vector) END AS distance
                 FROM rhokp_knowledge
-                WHERE (embedding <-> %s::vector) < 0.75
             ) AS combined_results
+            WHERE distance < 0.75
             ORDER BY distance
             LIMIT 2;
-        """, (search_keyword, query_vector, query_vector, query_vector, search_keyword, query_vector, query_vector, query_vector))
+        """, (search_keyword, query_vector, query_vector, search_keyword, query_vector, query_vector))
         
         rows = cur.fetchall()
         cur.close()
@@ -81,7 +80,7 @@ class RAGRecommenderAgent(BaseSreAgent):
         system_instructions = (
             "You are an OpenShift SRE Assistant.\n"
             "Using ONLY the context below, output a strictly typed JSON object representing the remediation intent.\n"
-            "The JSON must have this exact structure: {\"action\": \"restart_pod|delete_pvc|scale_deployment\", \"namespace\": \"...\", \"target\": \"...\"}\n"
+            "The JSON must have this exact structure: {\"action\": \"restart_pod|delete_pvc|scale_deployment|escalate_to_support|patch_resource|delete_resource|drain_node\", \"namespace\": \"...\", \"target\": \"...\"}\n"
             "For the 'target' field, you MUST use the specific host or object name provided in the ALERT, rather than generic terms from the context.\n"
             "Do NOT output any raw bash commands, explanations, or markdown formatting."
         )
@@ -115,6 +114,17 @@ class RAGRecommenderAgent(BaseSreAgent):
                 proposed_action = '{"action": "investigate", "namespace": "' + state.get('namespace', 'unknown') + '", "target": "requires-human-review"}'
             else:
                 proposed_action = '{"action": "investigate", "namespace": "' + state.get('namespace', 'unknown') + '", "target": "cluster"}'
+        if proposed_action and proposed_action.startswith("{"):
+            import json
+            try:
+                parsed = json.loads(proposed_action)
+                extracted_action = parsed.get("action", "")
+                if extracted_action in ["drain_node", "patch_resource"]:
+                    risk_level = "high"
+                elif extracted_action in ["delete_resource", "delete_pvc"]:
+                    risk_level = "high" if risk_level == "high" else "medium"
+            except Exception:
+                pass
 
         # Update Blackboard State
         state["remediation_plan"] = {
