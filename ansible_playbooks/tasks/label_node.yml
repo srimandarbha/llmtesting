@@ -1,0 +1,18 @@
+---
+# tasks/label_node.yml
+# Applies specific scheduling labels to worker nodes
+
+- name: Apply kubevirt schedulable label to target node
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ target }}"
+        labels:
+          kubevirt.io/schedulable: "true"
+
+- name: Confirm node label applied
+  ansible.builtin.debug:
+    msg: "Successfully applied kubevirt label to node {{ target }}."

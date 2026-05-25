@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import argparse
+import psycopg2
 from datetime import datetime
 
 # Silence Hugging Face diagnostics
@@ -115,15 +116,28 @@ def main():
             namespace = intent.get("namespace")
             
             print(f"[Execution Engine] Running strictly typed intent: {action} on {target} in {namespace}")
-            # MOCK EXECUTION: In reality, map this to an Ansible Tower API call or python subprocess
+            # Mocking the ansible command output
+            ansible_cmd = f"ansible-playbook ansible_playbooks/remediate.yml --extra-vars '{json.dumps(intent)}'"
+            print(f"[Execution Engine] (MOCK) Executing: {ansible_cmd}")
+            
             execution_success = True # Mocking a successful run
             
-            if execution_success:
-                print("[Execution Engine] SUCCESS: Intent executed successfully.")
-                # Mock atomic INSERT into agent_action_log
-                print(f"[Database] INSERT INTO agent_action_log (fingerprint, status) VALUES ('{final_state.get('alert_fingerprint')}', 'SUCCESS')")
-            else:
-                raise RuntimeError("Execution engine returned non-zero exit code.")
+            # Real atomic INSERT into agent_action_log
+            conn = psycopg2.connect(**DATABASE_TARGET)
+            cur = conn.cursor()
+            try:
+                if execution_success:
+                    print("[Execution Engine] SUCCESS: Intent executed successfully.")
+                    cur.execute("INSERT INTO agent_action_log (alert_fingerprint, status, created_at) VALUES (%s, %s, NOW())", (final_state.get('alert_fingerprint'), 'SUCCESS'))
+                    print(f"[Database] Inserted SUCCESS log for fingerprint {final_state.get('alert_fingerprint')}")
+                else:
+                    raise RuntimeError("Execution engine returned non-zero exit code.")
+            except Exception as e:
+                raise e
+            finally:
+                conn.commit()
+                cur.close()
+                conn.close()
                 
         except Exception as e:
             print(f"\n[Execution Engine] CRITICAL FAILURE: {e}")
@@ -131,11 +145,20 @@ def main():
             final_state["routing_decision"]["action_type"] = "manual_action"
             final_state["routing_decision"]["assigned_to"] = "human-sre-queue"
             final_state["routing_decision"]["reasoning"] += f" | ESCALATED DUE TO EXECUTION FAILURE: {e}"
-            print(f"[Database] INSERT INTO agent_action_log (fingerprint, status) VALUES ('{final_state.get('alert_fingerprint')}', 'FAILED')")
+            try:
+                conn = psycopg2.connect(**DATABASE_TARGET)
+                cur = conn.cursor()
+                cur.execute("INSERT INTO agent_action_log (alert_fingerprint, status, created_at) VALUES (%s, %s, NOW())", (final_state.get('alert_fingerprint'), 'FAILED'))
+                print(f"[Database] Inserted FAILED log for fingerprint {final_state.get('alert_fingerprint')}")
+                conn.commit()
+                cur.close()
+                conn.close()
+            except Exception as db_err:
+                print(f"[Database Error] Failed to log error state: {db_err}")
 
     # Output final state payload
     print("\nFINAL MULTI-AGENT STATE TRANSITION JSON:\n")
-    print(json.dumps(final_state, indent=2))
+    print(json.dumps(final_state, indent=2, default=str))
 
 if __name__ == "__main__":
     main()
