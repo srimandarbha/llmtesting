@@ -121,12 +121,23 @@ class GatekeeperDeciderAgent(BaseSreAgent):
         if not escalate_to_human:
             if env == "production":
                 if risk in ("high", "medium"):
-                    escalate_to_human = True
-                    reasoning_parts.append(
-                        f"Cluster is production and remediation risk level is {risk.upper()}. "
-                        f"Auto-remediation of medium/high risk alerts is restricted in prod."
-                    )
-            
+                    is_drain_exception = False
+                    proposed_action_str = remediation.get("proposed_action", "")
+                    if "drain_node" in proposed_action_str:
+                        allowed_drain_clusters = ["nzclu101", "us-east-prod-2"]
+                        if state.get("cluster_id") in allowed_drain_clusters:
+                            is_drain_exception = True
+
+                    if not is_drain_exception:
+                        escalate_to_human = True
+                        reasoning_parts.append(
+                            f"Cluster is production and remediation risk level is {risk.upper()}. "
+                            f"Auto-remediation of medium/high risk alerts is restricted in prod."
+                        )
+                    else:
+                        reasoning_parts.append(
+                            f"Cluster '{state.get('cluster_id')}' is whitelisted for automated drain_node in production. Bypassing risk gate."
+                        )
             if not escalate_to_human and confidence < 0.70:
                 escalate_to_human = True
                 reasoning_parts.append(f"LLM confidence score ({confidence:.2%}) is below the automation gate (70%).")
