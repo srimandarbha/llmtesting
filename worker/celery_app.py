@@ -46,8 +46,4 @@ celery_app.conf.update(
     # Worker
     worker_prefetch_multiplier=1,  # one task at a time per worker (safer for agent workloads)
     worker_max_tasks_per_child=100,
-    # SQLAlchemy transport: short polling interval for responsive local dev
-    broker_transport_options={
-        "polling_interval": 1,  # seconds between broker polls
-    },
 )

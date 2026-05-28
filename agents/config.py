@@ -38,6 +38,16 @@ LLM_API_URL = get_env_or_fail(
     default="http://127.0.0.1:8080/v1/chat/completions",
     required=False,
 )
+LLM_API_KEY = get_env_or_fail(
+    "LLM_API_KEY",
+    default="local",
+    required=False,
+)
+LLM_MODEL = get_env_or_fail(
+    "LLM_MODEL",
+    default="local-model",
+    required=False,
+)
 PROMETHEUS_URL = get_env_or_fail(
     "PROMETHEUS_URL", default="http://127.0.0.1:9090", required=False
 )
