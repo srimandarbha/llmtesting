@@ -94,11 +94,37 @@ def get_pod_status(input_json: str) -> str:
     Use this to confirm the alert is still active before taking action.
     Input must be a JSON string with keys "namespace" and "pod_name".
     """
+    pod_name = "unknown"
+    namespace = "unknown"
     try:
         import json
-        args = json.loads(input_json)
-        namespace = args.get("namespace", "default")
-        pod_name = args.get("pod_name", "")
+        if isinstance(input_json, str):
+            input_json = input_json.strip(" '`\n")
+        args = json.loads(input_json) if isinstance(input_json, str) else input_json
+        if isinstance(args, dict):
+            namespace = args.get("namespace", "default")
+            pod_name = args.get("pod_name", "")
+
+        from agents.config import USE_MOCK_SERVERS
+        if USE_MOCK_SERVERS:
+            return json.dumps(
+                {
+                    "pod": pod_name,
+                    "namespace": namespace,
+                    "phase": "Failed",
+                    "container_statuses": [
+                        {
+                            "name": "collector",
+                            "state": "terminated",
+                            "reason": "OOMKilled",
+                            "exit_code": 137
+                        }
+                    ],
+                    "message": "Pod was OOMKilled",
+                    "reason": "OOMKilled",
+                }
+            )
+
         # pyrefly: ignore [missing-import]
         from kubernetes import client as k8s_client, config as k8s_config
 
@@ -165,11 +191,34 @@ def query_prometheus(input_json: str) -> str:
     and SLO metrics. Pass a JSON string with keys "metric_query" and "cluster".
     Example: '{"metric_query": "ALERTS{alertname=\\"PodCrashLooping\\"}", "cluster": "nzclu101"}'
     """
+    metric_query = "unknown"
+    cluster = "unknown"
     try:
         import json
-        args = json.loads(input_json)
-        metric_query = args.get("metric_query", "")
-        cluster = args.get("cluster", "")
+        if isinstance(input_json, str):
+            input_json = input_json.strip(" '`\n")
+        args = json.loads(input_json) if isinstance(input_json, str) else input_json
+        if isinstance(args, dict):
+            metric_query = args.get("metric_query", "")
+            cluster = args.get("cluster", "")
+            
+        from agents.config import USE_MOCK_SERVERS
+        if USE_MOCK_SERVERS:
+            import time
+            return json.dumps(
+                {
+                    "query": metric_query,
+                    "cluster": cluster,
+                    "result_count": 1,
+                    "results": [
+                        {
+                            "metric": {"__name__": "up", "namespace": "cluster-logging-operator"},
+                            "value": [int(time.time()), "0"]
+                        }
+                    ],
+                }
+            )
+
         resp = requests.get(
             f"{PROMETHEUS_URL}/api/v1/query",
             params={"query": metric_query},
@@ -299,11 +348,16 @@ def get_incident_history(input_json: str) -> str:
     Use this to assess whether auto-remediation has previously succeeded.
     Input must be a JSON string with keys "cluster" and "alert_name".
     """
+    cluster = "unknown"
+    alert_name = "unknown"
     try:
         import json
-        args = json.loads(input_json)
-        cluster = args.get("cluster", "")
-        alert_name = args.get("alert_name", "")
+        if isinstance(input_json, str):
+            input_json = input_json.strip(" '`\n")
+        args = json.loads(input_json) if isinstance(input_json, str) else input_json
+        if isinstance(args, dict):
+            cluster = args.get("cluster", "")
+            alert_name = args.get("alert_name", "")
         conn = psycopg2.connect(**DATABASE_TARGET)
         cur = conn.cursor()
 
@@ -386,6 +440,8 @@ def classify_action(context_json: str) -> str:
     The 'confidence' field reflects how certain the model is.
     """
     try:
+        if isinstance(context_json, str):
+            context_json = context_json.strip(" '`\n")
         context = json.loads(context_json)
     except Exception:
         context = {"raw": context_json}
