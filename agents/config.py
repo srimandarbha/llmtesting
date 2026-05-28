@@ -64,6 +64,7 @@ AWX_BASE_URL = get_env_or_fail(
 AWX_API_TOKEN = get_env_or_fail("AWX_API_TOKEN", default="changeme", required=False)
 # Set USE_MOCK_AWX=false in production to use the real AWX client
 USE_MOCK_AWX = get_env_or_fail("USE_MOCK_AWX", default="true", required=False).lower() == "true"
+USE_MOCK_SERVERS = get_env_or_fail("USE_MOCK_SERVERS", default="true", required=False).lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Celery (uses PostgreSQL as broker — no Redis needed)

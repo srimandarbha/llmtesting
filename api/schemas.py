@@ -72,7 +72,7 @@ class LLMDecisionOut(BaseModel):
     raw_llm_output: str | None
     parsed_intent: dict | None
     confidence: float | None
-    tool_calls_json: dict | None
+    tool_calls_json: list | None
     timestamp: datetime
 
 

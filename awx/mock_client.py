@@ -43,17 +43,10 @@ class MockAWXClient:
         self._fail_rate = fail_rate
         self._pending_delay = pending_delay
         self._run_delay = run_delay
-        self._jobs: dict[str, dict] = {}
 
     def launch_job(self, template_id: str, extra_vars: dict) -> str:
-        job_id = str(uuid.uuid4())[:8]
-        started_at = time.monotonic()
-        self._jobs[job_id] = {
-            "template_id": template_id,
-            "extra_vars": extra_vars,
-            "started_at": started_at,
-            "fail": random.random() < self._fail_rate,
-        }
+        started_at = int(time.time())
+        job_id = f"mock-{started_at}-{uuid.uuid4().hex[:8]}"
         logger.info(
             "[MOCK AWX] Job launched: id=%s template=%s extra_vars=%s",
             job_id,
@@ -63,22 +56,26 @@ class MockAWXClient:
         return job_id
 
     def get_job_status(self, job_id: str) -> AWXJobResult:
-        if job_id not in self._jobs:
+        if not job_id.startswith("mock-"):
             return AWXJobResult(
                 job_id=job_id,
                 status=AWXJobStatus.ERROR,
                 url=f"http://mock-awx/#/jobs/{job_id}",
             )
 
-        job = self._jobs[job_id]
-        elapsed = time.monotonic() - job["started_at"]
+        try:
+            started_at = int(job_id.split("-")[1])
+        except (IndexError, ValueError):
+            started_at = time.time() - 100  # fallback
+
+        elapsed = time.time() - started_at
 
         if elapsed < self._pending_delay:
             status = AWXJobStatus.PENDING
         elif elapsed < self._pending_delay + self._run_delay:
             status = AWXJobStatus.RUNNING
         else:
-            status = AWXJobStatus.FAILED if job["fail"] else AWXJobStatus.SUCCESSFUL
+            status = AWXJobStatus.SUCCESSFUL
 
         logger.debug("[MOCK AWX] get_job_status id=%s → %s (elapsed=%.1fs)", job_id, status, elapsed)
 
@@ -88,15 +85,20 @@ class MockAWXClient:
             url=f"http://mock-awx/#/jobs/{job_id}",
             elapsed=round(elapsed, 2),
             failed=(status == AWXJobStatus.FAILED),
-            extra_vars=job["extra_vars"],
+            extra_vars={},
         )
 
     def cancel_job(self, job_id: str) -> bool:
-        if job_id in self._jobs:
-            job = self._jobs[job_id]
-            elapsed = time.monotonic() - job["started_at"]
-            is_terminal = elapsed >= self._pending_delay + self._run_delay
-            if not is_terminal:
-                logger.info("[MOCK AWX] Job %s canceled", job_id)
-                return True
+        if not job_id.startswith("mock-"):
+            return False
+        try:
+            started_at = int(job_id.split("-")[1])
+        except (IndexError, ValueError):
+            return False
+            
+        elapsed = time.time() - started_at
+        is_terminal = elapsed >= self._pending_delay + self._run_delay
+        if not is_terminal:
+            logger.info("[MOCK AWX] Job %s canceled", job_id)
+            return True
         return False
