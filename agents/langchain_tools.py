@@ -20,13 +20,17 @@ from typing import Literal, Optional
 
 import psycopg2
 import requests
+# pyrefly: ignore [missing-import]
 from langchain_core.tools import tool
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field
 
 from agents.config import (
     DATABASE_TARGET,
     EMBED_MODEL_NAME,
     LLM_API_URL,
+    LLM_API_KEY,
+    LLM_MODEL,
     PROMETHEUS_URL,
 )
 
@@ -83,13 +87,19 @@ class RemediationIntent(BaseModel):
 
 
 @tool
-def get_pod_status(namespace: str, pod_name: str) -> str:
+def get_pod_status(input_json: str) -> str:
     """
     Query the Kubernetes API for the current status of a specific pod.
     Returns pod phase, container statuses, and any recent events.
     Use this to confirm the alert is still active before taking action.
+    Input must be a JSON string with keys "namespace" and "pod_name".
     """
     try:
+        import json
+        args = json.loads(input_json)
+        namespace = args.get("namespace", "default")
+        pod_name = args.get("pod_name", "")
+        # pyrefly: ignore [missing-import]
         from kubernetes import client as k8s_client, config as k8s_config
 
         try:
@@ -148,14 +158,18 @@ def get_pod_status(namespace: str, pod_name: str) -> str:
 
 
 @tool
-def query_prometheus(metric_query: str, cluster: str) -> str:
+def query_prometheus(input_json: str) -> str:
     """
     Execute an instant PromQL query against Prometheus.
     Use this to check real-time resource utilisation, alert firing state,
-    and SLO metrics. Pass a valid PromQL expression as metric_query.
-    Example: 'ALERTS{alertname="PodCrashLooping", alertstate="firing"}'
+    and SLO metrics. Pass a JSON string with keys "metric_query" and "cluster".
+    Example: '{"metric_query": "ALERTS{alertname=\\"PodCrashLooping\\"}", "cluster": "nzclu101"}'
     """
     try:
+        import json
+        args = json.loads(input_json)
+        metric_query = args.get("metric_query", "")
+        cluster = args.get("cluster", "")
         resp = requests.get(
             f"{PROMETHEUS_URL}/api/v1/query",
             params={"query": metric_query},
@@ -193,6 +207,7 @@ _embed_model = None
 def _get_embed_model():
     global _embed_model
     if _embed_model is None:
+        # pyrefly: ignore [missing-import]
         from sentence_transformers import SentenceTransformer
         _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
     return _embed_model
@@ -276,14 +291,19 @@ def lookup_runbook(alert_name: str) -> str:
 
 
 @tool
-def get_incident_history(cluster: str, alert_name: str) -> str:
+def get_incident_history(input_json: str) -> str:
     """
     Query the Postgres database for the historical reoccurrence pattern of
     this alert on this cluster. Returns weekly incident count, reopen count,
     average MTTR, resolution quality score, and recent agent action count.
     Use this to assess whether auto-remediation has previously succeeded.
+    Input must be a JSON string with keys "cluster" and "alert_name".
     """
     try:
+        import json
+        args = json.loads(input_json)
+        cluster = args.get("cluster", "")
+        alert_name = args.get("alert_name", "")
         conn = psycopg2.connect(**DATABASE_TARGET)
         cur = conn.cursor()
 
@@ -397,15 +417,24 @@ def classify_action(context_json: str) -> str:
     )
 
     try:
+        headers = {}
+        if LLM_API_KEY and LLM_API_KEY != "local":
+            headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+        }
+        if LLM_MODEL and LLM_MODEL != "local-model":
+            payload["model"] = LLM_MODEL
+
         resp = requests.post(
             LLM_API_URL,
-            json={
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.1,
-            },
+            json=payload,
+            headers=headers,
             timeout=45,
         )
         resp.raise_for_status()

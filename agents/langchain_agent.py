@@ -24,7 +24,7 @@ from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
-from agents.config import LLM_API_URL
+from agents.config import LLM_API_URL, LLM_API_KEY, LLM_MODEL
 from agents.langchain_tools import (
     ALL_TOOLS,
     RemediationIntent,
@@ -49,8 +49,8 @@ def _get_llm() -> ChatOpenAI:
     """
     return ChatOpenAI(
         base_url=LLM_API_URL.replace("/v1/chat/completions", "/v1"),
-        api_key="local",  # llama.cpp doesn't require a real key
-        model="local-model",
+        api_key=LLM_API_KEY,
+        model=LLM_MODEL,
         temperature=0.1,
         max_retries=2,
         timeout=60,
@@ -69,7 +69,7 @@ You have access to the following tools:
 Use this format EXACTLY:
 Thought: think about what to do
 Action: tool_name
-Action Input: the tool input
+Action Input: a valid JSON object containing the tool arguments
 Observation: the tool result
 ... (repeat Thought/Action/Action Input/Observation as needed)
 Thought: I now know the final answer
@@ -152,17 +152,17 @@ def run_incident_pipeline(
     _notify("ANALYZING", "Gathering context from k8s, Prometheus, runbooks, history")
 
     pod_status_raw = get_pod_status.invoke(
-        {"namespace": namespace, "pod_name": hostname.split(".")[0]}
+        json.dumps({"namespace": namespace, "pod_name": hostname.split(".")[0]})
     )
     prometheus_raw = query_prometheus.invoke(
-        {
+        json.dumps({
             "metric_query": f'ALERTS{{alertname="{alert_name}", alertstate="firing"}}',
             "cluster": cluster,
-        }
+        })
     )
-    runbook_raw = lookup_runbook.invoke({"alert_name": alert_name})
+    runbook_raw = lookup_runbook.invoke(alert_name)
     history_raw = get_incident_history.invoke(
-        {"cluster": cluster, "alert_name": alert_name}
+        json.dumps({"cluster": cluster, "alert_name": alert_name})
     )
 
     # Aggregate context for classify_action

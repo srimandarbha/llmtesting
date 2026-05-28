@@ -97,7 +97,7 @@
     @apply px-4 py-3 border-b border-white/5 text-slate-300;
   }
   .data-table tr:hover td {
-    @apply bg-white/3 cursor-pointer;
+    @apply bg-white/5 cursor-pointer;
   }
 
   /* Sidebar nav */
