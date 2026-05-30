@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS incidents_v2 (
     risk_tier        TEXT CHECK (risk_tier IN ('LOW','HIGH','ESCALATE')),
     llm_confidence   NUMERIC(5,4),
     llm_intent_json  JSONB,
+    analysis_summary TEXT,
+    escalate_to      TEXT,
     awx_job_id       TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),

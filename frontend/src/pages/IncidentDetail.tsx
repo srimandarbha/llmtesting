@@ -13,7 +13,24 @@ export const IncidentDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [viewers, setViewers] = useState<string[]>([])
+  const [showTimeline, setShowTimeline] = useState(true)
+  const [showAnalysis, setShowAnalysis] = useState(true)
   const [showReasoning, setShowReasoning] = useState(false)
+  const [showHumanActions, setShowHumanActions] = useState(true)
+
+  const collapseAll = () => {
+    setShowTimeline(false)
+    setShowAnalysis(false)
+    setShowReasoning(false)
+    setShowHumanActions(false)
+  }
+
+  const expandAll = () => {
+    setShowTimeline(true)
+    setShowAnalysis(true)
+    setShowReasoning(true)
+    setShowHumanActions(true)
+  }
   const currentUser = localStorage.getItem('sre_user_id') || 'dev-user'
 
   const { data: incident, isLoading, error } = useQuery({
@@ -50,13 +67,18 @@ export const IncidentDetail: React.FC = () => {
 
   return (
     <div className="animate-fade-in space-y-6 max-w-5xl">
-      {/* Back link */}
-      <button
-        className="text-slate-400 hover:text-white text-sm flex items-center gap-1.5 transition-colors"
-        onClick={() => navigate('/')}
-      >
-        ← Back to Dashboard
-      </button>
+      <div className="flex items-center justify-between">
+        <button
+          className="text-slate-400 hover:text-white text-sm flex items-center gap-1.5 transition-colors"
+          onClick={() => navigate('/')}
+        >
+          ← Back to Dashboard
+        </button>
+        <div className="space-x-4">
+          <button onClick={expandAll} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">Expand All</button>
+          <button onClick={collapseAll} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">Collapse All</button>
+        </div>
+      </div>
 
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <div className="glass-card p-6">
@@ -125,15 +147,47 @@ export const IncidentDetail: React.FC = () => {
       )}
 
       {/* ─── Timeline ────────────────────────────────────────────────────── */}
-      <div className="glass-card p-6">
-        <h2 className="text-sm font-semibold text-slate-300 mb-5 flex items-center gap-2">
-          <span className="text-base">📋</span> Incident Timeline
-          <span className="ml-auto text-xs text-slate-500 font-normal">
-            {incident.timeline.length} events
-          </span>
-        </h2>
-        <Timeline events={incident.timeline} />
+      <div className="glass-card overflow-hidden">
+        <button
+          className="w-full px-6 py-4 flex items-center justify-between hover:bg-white/3 transition-colors"
+          onClick={() => setShowTimeline(!showTimeline)}
+        >
+          <div className="flex items-center gap-2">
+            <span>📋</span>
+            <span className="text-sm font-semibold text-slate-300">Incident Timeline</span>
+            <span className="ml-2 text-xs text-slate-500 font-normal">{incident.timeline.length} events</span>
+          </div>
+          <span className="text-slate-500 text-sm">{showTimeline ? '▴' : '▾'}</span>
+        </button>
+        {showTimeline && (
+          <div className="border-t border-white/5 p-6 animate-slide-in">
+            <Timeline events={incident.timeline} />
+          </div>
+        )}
       </div>
+
+      {/* ─── Analysis Summary ────────────────────────────────────────────── */}
+      {incident.analysis_summary && (
+        <div className="glass-card overflow-hidden">
+          <button
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-white/3 transition-colors"
+            onClick={() => setShowAnalysis(!showAnalysis)}
+          >
+            <div className="flex items-center gap-2">
+              <span>📊</span>
+              <span className="text-sm font-semibold text-slate-300">Enriched Analysis & Diagnostics</span>
+            </div>
+            <span className="text-slate-500 text-sm">{showAnalysis ? '▴' : '▾'}</span>
+          </button>
+          {showAnalysis && (
+            <div className="border-t border-white/5 p-6 animate-slide-in">
+              <pre className="text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">
+                {incident.analysis_summary}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ─── LLM Reasoning (collapsible) ─────────────────────────────────── */}
       {incident.llm_decisions.length > 0 && (
@@ -196,36 +250,46 @@ export const IncidentDetail: React.FC = () => {
 
       {/* ─── Human Actions log ───────────────────────────────────────────── */}
       {incident.human_actions.length > 0 && (
-        <div className="glass-card p-6">
-          <h2 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
-            <span>👤</span> Human Actions
-          </h2>
-          <div className="space-y-3">
-            {incident.human_actions.map(action => (
-              <div key={action.id} className="flex items-start gap-3 p-3 bg-surface-700/50 rounded-lg">
-                <div className={`w-2 h-2 rounded-full mt-1.5 ${
-                  action.action === 'APPROVED' ? 'bg-emerald-400'
-                  : action.action === 'REJECTED' ? 'bg-rose-400'
-                  : action.action === 'EDITED' ? 'bg-blue-400'
-                  : 'bg-amber-400'
-                }`} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-slate-200">{action.user_id}</span>
-                    <span className={`badge text-xs ${
-                      action.action === 'APPROVED' ? 'badge-resolved'
-                      : action.action === 'REJECTED' ? 'badge-rejected'
-                      : 'badge-analyzing'
-                    }`}>{action.action}</span>
-                    <span className="text-xs text-slate-500">
-                      {format(new Date(action.timestamp), 'MMM d, HH:mm:ss')}
-                    </span>
+        <div className="glass-card overflow-hidden">
+          <button
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-white/3 transition-colors"
+            onClick={() => setShowHumanActions(!showHumanActions)}
+          >
+            <div className="flex items-center gap-2">
+              <span>👤</span>
+              <span className="text-sm font-semibold text-slate-300">Human Actions</span>
+              <span className="ml-2 text-xs text-slate-500 font-normal">{incident.human_actions.length} actions</span>
+            </div>
+            <span className="text-slate-500 text-sm">{showHumanActions ? '▴' : '▾'}</span>
+          </button>
+          {showHumanActions && (
+            <div className="border-t border-white/5 p-6 space-y-3 animate-slide-in">
+              {incident.human_actions.map(action => (
+                <div key={action.id} className="flex items-start gap-3 p-3 bg-surface-700/50 rounded-lg">
+                  <div className={`w-2 h-2 rounded-full mt-1.5 ${
+                    action.action === 'APPROVED' ? 'bg-emerald-400'
+                    : action.action === 'REJECTED' ? 'bg-rose-400'
+                    : action.action === 'EDITED' ? 'bg-blue-400'
+                    : 'bg-amber-400'
+                  }`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-slate-200">{action.user_id}</span>
+                      <span className={`badge text-xs ${
+                        action.action === 'APPROVED' ? 'badge-resolved'
+                        : action.action === 'REJECTED' ? 'badge-rejected'
+                        : 'badge-analyzing'
+                      }`}>{action.action}</span>
+                      <span className="text-xs text-slate-500">
+                        {format(new Date(action.timestamp), 'MMM d, HH:mm:ss')}
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-400 mt-1 italic">"{action.reason}"</p>
                   </div>
-                  <p className="text-sm text-slate-400 mt-1 italic">"{action.reason}"</p>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

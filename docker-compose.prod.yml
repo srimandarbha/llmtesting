@@ -1,0 +1,73 @@
+services:
+  # ─── FastAPI API server ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DB_HOST: host.docker.internal
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-rhokp}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      LLM_API_URL: ${LLM_API_URL:-http://host.docker.internal:8080/v1/chat/completions}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://host.docker.internal:9090}
+      AWX_BASE_URL: ${AWX_BASE_URL:-http://host.docker.internal:8052}
+      AWX_API_TOKEN: ${AWX_API_TOKEN:-changeme}
+      USE_MOCK_AWX: "false"
+      API_KEY: ${API_KEY:-production-api-key}
+      BLAST_RADIUS_CAP: ${BLAST_RADIUS_CAP:-5}
+      DEDUP_WINDOW_MINUTES: ${DEDUP_WINDOW_MINUTES:-10}
+      CELERY_BROKER_URL: sqla+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
+      CELERY_RESULT_BACKEND: db+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Uvicorn without --reload for production
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    working_dir: /app
+    restart: always
+
+  # ─── Celery worker ──────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DB_HOST: host.docker.internal
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-rhokp}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      LLM_API_URL: ${LLM_API_URL:-http://host.docker.internal:8080/v1/chat/completions}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://host.docker.internal:9090}
+      AWX_BASE_URL: ${AWX_BASE_URL:-http://host.docker.internal:8052}
+      AWX_API_TOKEN: ${AWX_API_TOKEN:-changeme}
+      USE_MOCK_AWX: "false"
+      API_KEY: ${API_KEY:-production-api-key}
+      BLAST_RADIUS_CAP: ${BLAST_RADIUS_CAP:-5}
+      CELERY_BROKER_URL: sqla+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
+      CELERY_RESULT_BACKEND: db+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      celery -A worker.celery_app worker
+      --loglevel=info
+      --queues=default,priority
+      --concurrency=4
+    working_dir: /app
+    restart: always
+
+  # ─── React frontend (Production built via Nginx) ────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: always
