@@ -1,1 +1,3 @@
 runbooks_repo/
+*.pyc
+__pycache__/

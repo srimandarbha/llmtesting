@@ -60,7 +60,7 @@ def _update_incident_status(incident_id: str, new_status: str, **kwargs):
         set_clauses = ["status = %s", "updated_at = NOW()"]
         values = [new_status]
 
-        for col in ("risk_tier", "llm_confidence", "llm_intent_json", "awx_job_id", "resolved_at"):
+        for col in ("risk_tier", "llm_confidence", "llm_intent_json", "analysis_summary", "escalate_to", "awx_job_id", "resolved_at"):
             if col in kwargs:
                 set_clauses.append(f"{col} = %s")
                 val = kwargs[col]
@@ -253,6 +253,8 @@ def run_agent_pipeline(
                     risk_tier=result.risk_tier,
                     llm_confidence=result.intent.confidence,
                     llm_intent_json=intent_dict,
+                    analysis_summary=result.intent.analysis_summary,
+                    escalate_to=result.intent.escalate_to,
                 )
                 _insert_timeline(
                     incident_id,
@@ -271,6 +273,8 @@ def run_agent_pipeline(
                 risk_tier="LOW",
                 llm_confidence=result.intent.confidence,
                 llm_intent_json=intent_dict,
+                analysis_summary=result.intent.analysis_summary,
+                escalate_to=result.intent.escalate_to,
             )
             _insert_timeline(
                 incident_id,
@@ -310,6 +314,8 @@ def run_agent_pipeline(
                 risk_tier="HIGH",
                 llm_confidence=result.intent.confidence,
                 llm_intent_json=intent_dict,
+                analysis_summary=result.intent.analysis_summary,
+                escalate_to=result.intent.escalate_to,
             )
             _insert_timeline(
                 incident_id,
@@ -321,6 +327,7 @@ def run_agent_pipeline(
                 metadata={"proposed_intent": intent_dict},
             )
             logger.info("[Task] Incident %s now PENDING_APPROVAL", incident_id)
+            check_approval_timeout.apply_async(args=[incident_id], countdown=15 * 60)
 
         else:  # escalate
             _update_incident_status(
@@ -329,6 +336,8 @@ def run_agent_pipeline(
                 risk_tier="ESCALATE",
                 llm_confidence=result.intent.confidence,
                 llm_intent_json=intent_dict,
+                analysis_summary=result.intent.analysis_summary,
+                escalate_to=result.intent.escalate_to,
             )
             _insert_timeline(
                 incident_id,
@@ -468,3 +477,53 @@ def trigger_pagerduty_escalation(incident_id: str, reason: str):
         logger.info("[PagerDuty] Incident created for %s", incident_id)
     except Exception as e:
         logger.error("[PagerDuty] Failed to create incident: %s", e)
+
+# ---------------------------------------------------------------------------
+# Task 4: Approval Timeout Check
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(name="worker.tasks.check_approval_timeout")
+def check_approval_timeout(incident_id: str):
+    """Check if an incident is still in PENDING_APPROVAL and escalate if so."""
+    conn = psycopg2.connect(**DATABASE_TARGET)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT status FROM incidents_v2 WHERE id = %s", (incident_id,))
+        row = cur.fetchone()
+        if not row:
+            return
+        
+        status = row[0]
+        if status == "PENDING_APPROVAL":
+            logger.warning("[Task] Incident %s timed out waiting for human approval. Escalating.", incident_id)
+            _update_incident_status(incident_id, "ESCALATED")
+            _insert_timeline(
+                incident_id,
+                actor_type="system",
+                action="Approval timeout reached — auto-escalated",
+                from_status="PENDING_APPROVAL",
+                to_status="ESCALATED",
+                notes="Timed out after 15 minutes waiting for human action.",
+            )
+            
+            # Broadcast WebSocket status change so UI updates
+            from api.websocket import manager
+            from db.session import run_in_new_loop
+            import asyncio
+            # Running async function in synchronous celery task
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(manager.broadcast_status_change(incident_id, "ESCALATED", actor="system"))
+            except RuntimeError:
+                asyncio.run(manager.broadcast_status_change(incident_id, "ESCALATED", actor="system"))
+                
+            trigger_pagerduty_escalation.delay(
+                incident_id,
+                "Timed out waiting for human approval after 15 minutes"
+            )
+    except Exception as e:
+        logger.error("[Task] check_approval_timeout failed for %s: %s", incident_id, e)
+    finally:
+        cur.close()
+        conn.close()

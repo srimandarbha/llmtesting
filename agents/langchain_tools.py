@@ -67,6 +67,14 @@ class RemediationIntent(BaseModel):
         le=1.0,
         description="Confidence score 0.0–1.0 for this remediation intent",
     )
+    analysis_summary: str = Field(
+        default="",
+        description="Detailed markdown analysis including existing tickets, maintenance, RedHat cases, diagnostics, remediation, and validation steps."
+    )
+    escalate_to: str = Field(
+        default="SRE-Triage",
+        description="Who to escalate to, based on the Escalation Matrix, if validation fails or risk is high."
+    )
 
     def to_awx_extra_vars(self) -> dict:
         """
@@ -271,6 +279,20 @@ def lookup_runbook(alert_name: str) -> str:
     Always call this before recommending any action.
     """
     try:
+        from agents.config import USE_MOCK_SERVERS
+        if USE_MOCK_SERVERS:
+            import json
+            return json.dumps({
+                "alert_name": alert_name,
+                "runbook_hits": 1,
+                "results": [{
+                    "source_id": "mock_runbook_1",
+                    "source_table": "rhokp_knowledge",
+                    "similarity": 0.95,
+                    "excerpt": f"Standard remediation for {alert_name}: Requires manual approval if risk is high. Check node status, drain node if kernel panic, or restart pods."
+                }]
+            })
+            
         embed_model = _get_embed_model()
         query_text = f"Remediation procedure for alert: {alert_name}"
         query_vector = embed_model.encode(query_text).tolist()
@@ -361,40 +383,39 @@ def get_incident_history(input_json: str) -> str:
         conn = psycopg2.connect(**DATABASE_TARGET)
         cur = conn.cursor()
 
-        # Fingerprint-based lookup
-        import hashlib
-        raw = f"{alert_name}{''}prometheus{cluster}"
-        fingerprint = hashlib.sha256(raw.encode()).hexdigest()
+        # Fingerprint logic was flawed because we lack namespace and operator component in this context.
+        # Instead, query by alertname and cluster directly.
 
         # Weekly frequency
         cur.execute(
             """
-            SELECT COUNT(*) FROM incidents
-            WHERE alert_fingerprint = %s AND sys_created_on > NOW() - INTERVAL '7 days';
+            SELECT COUNT(i.*) FROM incidents i
+            JOIN alert_occurrences a ON i.alert_fingerprint = a.fingerprint
+            WHERE a.alertname = %s AND a.cluster_id = %s AND i.sys_created_on > NOW() - INTERVAL '7 days';
             """,
-            (fingerprint,),
+            (alert_name, cluster),
         )
         weekly_count = cur.fetchone()[0] or 0
 
         # Recurrence intelligence
         cur.execute(
             """
-            SELECT total_occurrences, total_incidents, reopen_count,
-                   mttr_seconds, resolution_quality_score
-            FROM recurrence_intelligence WHERE fingerprint = %s;
+            SELECT SUM(total_occurrences), SUM(total_incidents), SUM(reopen_count),
+                   AVG(mttr_seconds), AVG(resolution_quality_score)
+            FROM recurrence_intelligence WHERE alertname = %s AND cluster_id = %s;
             """,
-            (fingerprint,),
+            (alert_name, cluster),
         )
         rec = cur.fetchone()
 
         # Agent auto-remediation count last 24h
         cur.execute(
             """
-            SELECT COUNT(*) FROM agent_action_log
-            WHERE alert_fingerprint = %s AND status = 'SUCCESS'
-            AND created_at >= NOW() - INTERVAL '24 hours';
+            SELECT COUNT(*) FROM incidents_v2
+            WHERE alert_name = %s AND cluster = %s AND status = 'RESOLVED'
+            AND updated_at >= NOW() - INTERVAL '24 hours';
             """,
-            (fingerprint,),
+            (alert_name, cluster),
         )
         agent_24h = cur.fetchone()[0] or 0
 
@@ -446,19 +467,32 @@ def classify_action(context_json: str) -> str:
     except Exception:
         context = {"raw": context_json}
 
+    try:
+        import os
+        matrix_path = os.path.join(os.path.dirname(__file__), "escalation_matrix.json")
+        with open(matrix_path, "r") as f:
+            escalation_matrix = f.read()
+    except Exception:
+        escalation_matrix = '{"default": "SRE-Triage"}'
+
     system_prompt = textwrap.dedent(
-        """
+        f"""
         You are an expert OpenShift/Kubernetes SRE.
         Given alert context, produce a strictly typed remediation intent in JSON.
 
         Output MUST be valid JSON matching this schema exactly:
-        {
+        {{
           "action": "<one of: restart_pod|clear_evicted_pods|scale_up_replicas|delete_pvc|drain_node|scale_down_deployment|escalate>",
           "namespace": "<kubernetes namespace>",
           "target": "<specific pod/node/deployment name from the alert, never generic>",
           "reason": "<one sentence reason based only on context provided>",
-          "confidence": <float 0.0 to 1.0>
-        }
+          "confidence": <float 0.0 to 1.0>,
+          "analysis_summary": "<Detailed markdown analysis containing: 1) Actual Remediation 2) Diagnostics 3) Validation Steps 4) Existing Tickets/Maintenance 5) RedHat Cases. If validation is not successful, state that it will escalate to human.>",
+          "escalate_to": "<Target team from the Escalation Matrix>"
+        }}
+
+        Escalation Matrix:
+        {escalation_matrix}
 
         Rules:
         - Use ONLY information from the provided context. Never hallucinate resource names.
@@ -515,6 +549,8 @@ def classify_action(context_json: str) -> str:
             target=context.get("hostname", "unknown"),
             reason=f"LLM classification failed: {e}. Defaulting to escalation.",
             confidence=0.0,
+            analysis_summary="LLM classification failed. Escalate to human.",
+            escalate_to="SRE-Triage",
         )
         return fallback.model_dump_json()
 

@@ -3,7 +3,7 @@ import axios from 'axios'
 const API_BASE = '/api'
 
 // Auth token (in production, pull from OIDC token store)
-const getToken = () => localStorage.getItem('sre_token') || ''
+const getToken = () => localStorage.getItem('sre_token') || 'dev-api-key-change-in-prod'
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
@@ -28,6 +28,8 @@ export interface Incident {
   risk_tier: string | null
   llm_confidence: number | null
   llm_intent_json: Record<string, unknown> | null
+  analysis_summary: string | null
+  escalate_to: string | null
   awx_job_id: string | null
   created_at: string
   updated_at: string

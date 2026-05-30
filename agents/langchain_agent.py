@@ -20,7 +20,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from langchain.agents import AgentExecutor, create_react_agent
+from langchain.agents.agent import AgentExecutor
+from langchain.agents.react.agent import create_react_agent
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 

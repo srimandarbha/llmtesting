@@ -229,6 +229,7 @@ def generate_mock_data(conn):
     # 2. Alert Occurrences (Deterministic Fingerprints)
     # Define a base list of alert profiles
     alert_profiles = [
+        ("CollectorNodeDown", "cluster-logging-operator", "logging-operator", "warning"),
         ("KubeAPIDown", "openshift-kube-apiserver", "kube-apiserver-operator", "critical"),
         ("CoreDNSErrorsHigh", "openshift-dns", "cluster-dns-operator", "warning"),
         ("KubeVirtNoAvailableNodesToRunVMs", "openshift-cnv", "kubevirt-hyperconverged-operator", "critical"),
