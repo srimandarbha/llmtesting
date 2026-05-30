@@ -1,3 +1,49 @@
-requests
-psycopg2-binary
-sentence-transformers
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# ── Core HTTP / Async ─────────────────────────────────────────────────────────
+requests==2.32.3
+httpx==0.28.1
+uvicorn[standard]==0.32.1
+fastapi==0.115.5
+python-multipart==0.0.12
+
+# ── LangChain ─────────────────────────────────────────────────────────────────
+langchain==0.3.14
+langchain-openai==0.3.0
+langchain-community==0.3.14
+langchain-core==0.3.29
+
+# ── Pydantic / Settings ───────────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# ── Database ──────────────────────────────────────────────────────────────────
+psycopg2-binary==2.9.10
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# ── Celery ────────────────────────────────────────────────────────────────────
+celery==5.4.0
+kombu==5.4.2
+# Broker: PostgreSQL via SQLAlchemy transport (uses sqlalchemy from DB section)
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ── Embeddings / ML ───────────────────────────────────────────────────────────
+sentence-transformers==3.3.1
+numpy==1.26.4
+
+# ── Kubernetes ────────────────────────────────────────────────────────────────
+kubernetes==31.0.0
+
+# ── Observability ─────────────────────────────────────────────────────────────
+structlog==24.4.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+respx==0.21.1
+pytest-mock==3.14.0

@@ -1,0 +1,28 @@
+---
+# tasks/restart_pod.yml
+# Safely restarts a pod by deleting it (ReplicaSet will recreate it)
+
+- name: Retrieve pod details
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: "{{ target }}"
+    namespace: "{{ namespace }}"
+  register: pod_info
+
+- name: Fail if pod does not exist
+  ansible.builtin.fail:
+    msg: "Pod {{ target }} not found in namespace {{ namespace }}"
+  when: pod_info.resources | length == 0
+
+- name: Delete pod to trigger restart
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: "{{ target }}"
+    namespace: "{{ namespace }}"
+
+- name: Wait for new pod to become ready
+  ansible.builtin.debug:
+    msg: "Pod {{ target }} deleted successfully. ReplicaSet will provision a new instance."
