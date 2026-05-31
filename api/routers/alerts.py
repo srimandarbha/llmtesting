@@ -39,7 +39,7 @@ async def ingest_alert(payload: AlertIngestRequest):
             """
             SELECT id, status FROM incidents_v2
             WHERE alert_name = %s AND cluster = %s AND namespace = %s
-              AND created_at > NOW() - INTERVAL '%s minutes'
+              AND created_at > NOW() - (INTERVAL '1 minute' * %s)
               AND status NOT IN ('REJECTED', 'ESCALATED', 'FAILED', 'RESOLVED')
             ORDER BY created_at DESC LIMIT 1;
             """,

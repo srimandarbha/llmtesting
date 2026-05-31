@@ -26,7 +26,7 @@ from agents.risk_engine import (
     is_action_allowed,
 )
 from awx.client import AWXJobStatus
-from awx.mock_client import MockAWXClient
+from simulation.mock_client import MockAWXClient
 
 
 # ─── Risk engine tests ────────────────────────────────────────────────────────

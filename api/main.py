@@ -24,6 +24,7 @@ from api.routers.analytics import router as analytics_router
 from api.routers.incidents import router as incidents_router
 from api.routers.cve_advisor import router as cve_advisor_router
 from api.websocket import manager
+from db.pg_notify import listen_for_pg_notifications
 from db.session import close_engine
 
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +39,12 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("SRE Incident Agent API starting up...")
+    # Start the PostgreSQL NOTIFY listener — bridges Celery → WebSocket
+    import asyncio
+    pg_listener_task = asyncio.create_task(listen_for_pg_notifications(manager))
     yield
     logger.info("SRE Incident Agent API shutting down...")
+    pg_listener_task.cancel()
     await close_engine()
 
 

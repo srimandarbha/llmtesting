@@ -19,7 +19,6 @@ import textwrap
 from typing import Literal, Optional
 
 import psycopg2
-import requests
 # pyrefly: ignore [missing-import]
 from langchain_core.tools import tool
 # pyrefly: ignore [missing-import]
@@ -28,9 +27,6 @@ from pydantic import BaseModel, Field
 from agents.config import (
     DATABASE_TARGET,
     EMBED_MODEL_NAME,
-    LLM_API_URL,
-    LLM_API_KEY,
-    LLM_MODEL,
     PROMETHEUS_URL,
 )
 
@@ -454,11 +450,18 @@ def get_incident_history(input_json: str) -> str:
 @tool
 def classify_action(context_json: str) -> str:
     """
-    Call the LLM to classify the alert context into a typed RemediationIntent.
+    Validate and structure the gathered alert context, then instruct the ReAct
+    agent (you) to produce a RemediationIntent JSON response.
+
+    This tool does NOT make a second LLM call. The ReAct agent is the LLM.
+    Calling this tool returns a structured prompt that YOU (the agent) must
+    answer with a valid RemediationIntent JSON as your Final Answer.
+
     Input must be a JSON string with keys: alert_name, namespace, cluster,
     hostname, runbook_context, pod_status, prometheus_data, incident_history.
-    Returns a JSON string matching the RemediationIntent schema.
-    The 'confidence' field reflects how certain the model is.
+
+    Allowed actions: restart_pod | clear_evicted_pods | scale_up_replicas |
+                     delete_pvc | drain_node | scale_down_deployment | escalate
     """
     try:
         if isinstance(context_json, str):
@@ -475,85 +478,34 @@ def classify_action(context_json: str) -> str:
     except Exception:
         escalation_matrix = '{"default": "SRE-Triage"}'
 
-    system_prompt = textwrap.dedent(
-        f"""
-        You are an expert OpenShift/Kubernetes SRE.
-        Given alert context, produce a strictly typed remediation intent in JSON.
+    # Return a structured instruction — the ReAct agent will use this to produce the Final Answer
+    instruction = textwrap.dedent(f"""
+        Based on the following alert context, produce your Final Answer as a
+        valid JSON object matching the RemediationIntent schema below.
+        DO NOT include any text outside the JSON object.
 
-        Output MUST be valid JSON matching this schema exactly:
+        Schema:
         {{
-          "action": "<one of: restart_pod|clear_evicted_pods|scale_up_replicas|delete_pvc|drain_node|scale_down_deployment|escalate>",
+          "action": "<restart_pod|clear_evicted_pods|scale_up_replicas|delete_pvc|drain_node|scale_down_deployment|escalate>",
           "namespace": "<kubernetes namespace>",
-          "target": "<specific pod/node/deployment name from the alert, never generic>",
-          "reason": "<one sentence reason based only on context provided>",
-          "confidence": <float 0.0 to 1.0>,
-          "analysis_summary": "<Detailed markdown analysis containing: 1) Actual Remediation 2) Diagnostics 3) Validation Steps 4) Existing Tickets/Maintenance 5) RedHat Cases. If validation is not successful, state that it will escalate to human.>",
-          "escalate_to": "<Target team from the Escalation Matrix>"
+          "target": "<specific pod/node/deployment name -- never generic>",
+          "reason": "<one-sentence reason derived only from context>",
+          "confidence": <float 0.0-1.0>,
+          "analysis_summary": "<markdown: 1) Remediation 2) Diagnostics 3) Validation 4) Tickets 5) RH Cases>",
+          "escalate_to": "<team from escalation matrix>"
         }}
 
-        Escalation Matrix:
-        {escalation_matrix}
+        Escalation Matrix: {escalation_matrix}
 
         Rules:
-        - Use ONLY information from the provided context. Never hallucinate resource names.
-        - If context is insufficient or ambiguous, set action="escalate" and confidence<0.75.
-        - Do NOT include markdown, explanations, or any text outside the JSON object.
-        """
-    )
+        - Use ONLY information from context. Never hallucinate resource names.
+        - If context is insufficient, set action="escalate" and confidence<0.75.
 
-    user_prompt = (
-        f"Alert context:\n{json.dumps(context, indent=2)}\n\n"
-        "Produce the remediation intent JSON:"
-    )
+        Alert Context:
+        {json.dumps(context, indent=2)}
+    """)
 
-    try:
-        headers = {}
-        if LLM_API_KEY and LLM_API_KEY != "local":
-            headers["Authorization"] = f"Bearer {LLM_API_KEY}"
-
-        payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.1,
-            "reasoning": {"enabled": True},
-        }
-        if LLM_MODEL and LLM_MODEL != "local-model":
-            payload["model"] = LLM_MODEL
-
-        resp = requests.post(
-            LLM_API_URL,
-            json=payload,
-            headers=headers,
-            timeout=45,
-        )
-        resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-
-        # Strip any accidental markdown fences
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip().rstrip("```").strip()
-
-        # Validate against Pydantic schema
-        intent = RemediationIntent.model_validate_json(raw)
-        return intent.model_dump_json()
-
-    except Exception as e:
-        # Fallback: safe escalation
-        fallback = RemediationIntent(
-            action="escalate",
-            namespace=context.get("namespace", "unknown"),
-            target=context.get("hostname", "unknown"),
-            reason=f"LLM classification failed: {e}. Defaulting to escalation.",
-            confidence=0.0,
-            analysis_summary="LLM classification failed. Escalate to human.",
-            escalate_to="SRE-Triage",
-        )
-        return fallback.model_dump_json()
+    return instruction
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from agents.langchain_agent import run_incident_pipeline
 from agents.langchain_tools import RemediationIntent
 from awx.client import AWXJobStatus
 from db.models import log_timeline_event
+from db.pg_notify import notify_status_change
 from db.session import run_in_new_loop
 from worker.celery_app import celery_app
 
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 def _get_awx_client():
     if USE_MOCK_AWX:
-        from awx.mock_client import MockAWXClient
+        from simulation.mock_client import MockAWXClient
         return MockAWXClient(fail_rate=0.0, pending_delay=1.0, run_delay=3.0)
     from awx.client import AWXClient
     return AWXClient()
@@ -206,6 +207,8 @@ def run_agent_pipeline(
             to_status=new_status,
             notes=notes,
         )
+        # Notify FastAPI WebSocket listener via PostgreSQL NOTIFY
+        notify_status_change(str(inc_id), new_status, actor="agent")
 
     try:
         _insert_timeline(
@@ -508,17 +511,8 @@ def check_approval_timeout(incident_id: str):
                 notes="Timed out after 15 minutes waiting for human action.",
             )
             
-            # Broadcast WebSocket status change so UI updates
-            from api.websocket import manager
-            from db.session import run_in_new_loop
-            import asyncio
-            # Running async function in synchronous celery task
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(manager.broadcast_status_change(incident_id, "ESCALATED", actor="system"))
-            except RuntimeError:
-                asyncio.run(manager.broadcast_status_change(incident_id, "ESCALATED", actor="system"))
-                
+            # Notify FastAPI WebSocket listener via PostgreSQL NOTIFY
+            notify_status_change(incident_id, "ESCALATED", actor="system")
             trigger_pagerduty_escalation.delay(
                 incident_id,
                 "Timed out waiting for human approval after 15 minutes"

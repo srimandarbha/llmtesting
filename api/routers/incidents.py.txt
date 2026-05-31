@@ -252,7 +252,7 @@ async def approve_incident(
         # Launch AWX job with the ORIGINAL validated intent
         from agents.config import USE_MOCK_AWX
         if USE_MOCK_AWX:
-            from awx.mock_client import MockAWXClient
+            from simulation.mock_client import MockAWXClient
             awx = MockAWXClient()
         else:
             from awx.client import AWXClient
@@ -393,7 +393,7 @@ async def edit_and_approve_incident(
 
         from agents.config import USE_MOCK_AWX
         if USE_MOCK_AWX:
-            from awx.mock_client import MockAWXClient
+            from simulation.mock_client import MockAWXClient
             awx = MockAWXClient()
         else:
             from awx.client import AWXClient

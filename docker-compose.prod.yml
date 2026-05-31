@@ -61,6 +61,29 @@ services:
     working_dir: /app
     restart: always
 
+  # ─── Kafka Consumer ─────────────────────────────────────────────────────────
+  kafka-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      - worker
+    environment:
+      DB_HOST: ${DB_HOST:-host.docker.internal}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-rhokp}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      KAFKA_BROKER_URL: ${KAFKA_BROKER_URL:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-sre_alerts}
+      CELERY_BROKER_URL: sqla+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-rhokp}
+      CELERY_RESULT_BACKEND: db+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-rhokp}
+    command: python ingestion/kafka_consumer.py
+    volumes:
+      - .:/app
+    working_dir: /app
+    restart: always
+
   # ─── React frontend (Production built via Nginx) ────────────────────────────
   frontend:
     build:

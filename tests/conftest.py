@@ -55,14 +55,14 @@ def sample_alert():
 @pytest.fixture
 def mock_awx():
     """Returns a MockAWXClient with 0% failure rate."""
-    from awx.mock_client import MockAWXClient
+    from simulation.mock_client import MockAWXClient
     return MockAWXClient(fail_rate=0.0, pending_delay=0.1, run_delay=0.2)
 
 
 @pytest.fixture
 def mock_failing_awx():
     """Returns a MockAWXClient that always fails."""
-    from awx.mock_client import MockAWXClient
+    from simulation.mock_client import MockAWXClient
     return MockAWXClient(fail_rate=1.0, pending_delay=0.1, run_delay=0.2)
 
 
