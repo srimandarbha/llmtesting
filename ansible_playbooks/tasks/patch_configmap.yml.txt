@@ -1,0 +1,18 @@
+---
+# tasks/patch_configmap.yml
+# Updates timeouts or routes in configmaps
+
+- name: Patch target ConfigMap
+  kubernetes.core.k8s_json_patch:
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ target }}"
+    namespace: "{{ namespace }}"
+    patch:
+      - op: replace
+        path: /data/upstream_timeout
+        value: "5s"
+
+- name: Confirm patch success
+  ansible.builtin.debug:
+    msg: "ConfigMap {{ target }} patched successfully."

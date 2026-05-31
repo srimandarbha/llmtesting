@@ -259,3 +259,25 @@ async def log_timeline_event(
     )
     session.add(event)
     return event
+
+
+# ---------------------------------------------------------------------------
+# Cluster Inventory
+# ---------------------------------------------------------------------------
+
+class ClusterInventory(Base):
+    __tablename__ = "cluster_inventory"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    current_version: Mapped[str] = mapped_column(String, nullable=False)
+    active_cves: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<ClusterInventory id={self.id} name={self.name} version={self.current_version}>"

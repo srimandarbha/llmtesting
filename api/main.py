@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routers.alerts import router as alerts_router
 from api.routers.analytics import router as analytics_router
 from api.routers.incidents import router as incidents_router
+from api.routers.cve_advisor import router as cve_advisor_router
 from api.websocket import manager
 from db.session import close_engine
 
@@ -81,6 +82,7 @@ app.add_middleware(
 app.include_router(alerts_router)
 app.include_router(incidents_router)
 app.include_router(analytics_router)
+app.include_router(cve_advisor_router)
 
 
 # ---------------------------------------------------------------------------

@@ -346,6 +346,7 @@ def run_agent_pipeline(
                 from_status="ANALYZING",
                 to_status="ESCALATED",
                 notes=result.risk_reasoning,
+                metadata={"intent": intent_dict},
             )
             trigger_pagerduty_escalation.delay(
                 incident_id,
