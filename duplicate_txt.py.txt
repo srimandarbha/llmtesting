@@ -1,0 +1,29 @@
+import os
+import shutil
+
+def duplicate_as_txt(root_dir):
+    ignore_dirs = {'.venv', '.git', '__pycache__', 'node_modules'}
+    
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # Exclude ignored directories
+        dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
+        
+        for filename in filenames:
+            filepath = os.path.join(dirpath, filename)
+            
+            # Skip files that are already .txt or large binaries if needed
+            if filename.endswith('.txt') or filename.endswith('.zip') or filename.endswith('.jsonl'):
+                continue
+                
+            # Create a copy with .txt extension appended
+            txt_filename = filename + ".txt"
+            txt_filepath = os.path.join(dirpath, txt_filename)
+            
+            try:
+                shutil.copy2(filepath, txt_filepath)
+                print(f"Created: {txt_filepath}")
+            except Exception as e:
+                print(f"Failed to copy {filepath}: {e}")
+
+if __name__ == "__main__":
+    duplicate_as_txt(os.getcwd())
