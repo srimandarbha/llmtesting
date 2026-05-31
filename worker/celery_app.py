@@ -11,15 +11,31 @@ Workers:
 
 # pyrefly: ignore [missing-import]
 from celery import Celery
+from celery.signals import worker_process_init
 
 from agents.config import CELERY_BROKER_URL, CELERY_RESULT_BACKEND
 
 celery_app = Celery(
-    "sre_incident_agent",
+    "sre_worker",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
     include=["worker.tasks"],
 )
+
+
+@worker_process_init.connect
+def preload_embedding_model(**kwargs):
+    """
+    Pre-load the SentenceTransformer model at Celery worker process startup.
+    This avoids a thread-safety race condition when multiple task threads try
+    to initialize the global _embed_model in langchain_tools.py simultaneously.
+    """
+    from agents.langchain_tools import _get_embed_model
+    import logging
+    logging.getLogger(__name__).info("Pre-loading embedding model at worker startup...")
+    _get_embed_model()
+    logging.getLogger(__name__).info("Embedding model ready.")
+
 
 celery_app.conf.update(
     # Serialization
