@@ -55,6 +55,7 @@ def _get_llm() -> ChatOpenAI:
         temperature=0.1,
         max_retries=2,
         timeout=60,
+        model_kwargs={"extra_body": {"reasoning": {"enabled": True}}},
     )
 
 
@@ -198,26 +199,36 @@ def run_incident_pipeline(
         return_intermediate_steps=True,
     )
 
-    agent_result = executor.invoke(
-        {
-            "alert_name": alert_name,
-            "namespace": namespace,
-            "cluster": cluster,
-            "hostname": hostname,
-            "correlation_id": correlation_id,
-        }
-    )
-
-    raw_output: str = agent_result.get("output", "")
-    intermediate_steps: list = agent_result.get("intermediate_steps", [])
+    try:
+        agent_result = executor.invoke(
+            {
+                "alert_name": alert_name,
+                "namespace": namespace,
+                "cluster": cluster,
+                "hostname": hostname,
+                "correlation_id": correlation_id,
+            }
+        )
+        raw_output: str = agent_result.get("output", "")
+        intermediate_steps: list = agent_result.get("intermediate_steps", [])
+    except Exception as e:
+        # LLM parsing errors or max iterations hit
+        raw_output = str(e)
+        intermediate_steps = []
 
     # Collect tool call log for llm_decisions
     tool_calls: list[dict] = []
     for step in intermediate_steps:
         action_obj, observation = step
+        tool_name = getattr(action_obj, "tool", "unknown")
+        
+        # Skip Langchain's internal parsing errors from showing up in the UI
+        if tool_name == "_Exception":
+            continue
+            
         tool_calls.append(
             {
-                "tool": getattr(action_obj, "tool", "unknown"),
+                "tool": tool_name,
                 "input": getattr(action_obj, "tool_input", {}),
                 "output": str(observation)[:1000],
             }

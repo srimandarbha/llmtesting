@@ -145,3 +145,90 @@
   0%, 100% { box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.3); }
   50%       { box-shadow: 0 0 0 6px rgba(251, 146, 60, 0); }
 }
+
+/* Premium Light Theme (Day Mode) Overrides */
+html.theme-day body,
+html.theme-day main {
+  background-color: #f8fafc !important; /* Slate-50 */
+  color: #0f172a !important; /* Slate-900 */
+}
+
+html.theme-day aside,
+html.theme-day .glass-card,
+html.theme-day .bg-surface-800 {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.theme-day .text-white,
+html.theme-day .text-slate-200,
+html.theme-day .text-slate-300 {
+  color: #1e293b !important;
+}
+
+html.theme-day .text-slate-400,
+html.theme-day .text-slate-500 {
+  color: #64748b !important;
+}
+
+html.theme-day .border-white\/5,
+html.theme-day .border-white\/10 {
+  border-color: #e2e8f0 !important;
+}
+
+html.theme-day .bg-surface-700,
+html.theme-day .bg-slate-900 {
+  background-color: #f1f5f9 !important;
+}
+
+html.theme-day .bg-surface-700\/50,
+html.theme-day .bg-slate-900\/50 {
+  background-color: #f1f5f980 !important;
+}
+
+/* Fix table headers and input fields */
+html.theme-day th {
+  background-color: #f1f5f9 !important;
+  color: #475569 !important;
+}
+
+html.theme-day .input {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Hover effects for sidebars and tables */
+html.theme-day .hover\:bg-white\/5:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Fix timeline lines */
+html.theme-day .timeline-item::before {
+  background-color: #e2e8f0 !important;
+}
+
+/* Specific button styles */
+html.theme-day .btn-ghost {
+  color: #475569 !important;
+  border-color: #e2e8f0 !important;
+  background-color: #ffffff !important;
+}
+html.theme-day .btn-ghost:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+html.theme-day .nav-link.active {
+  background-color: #e0eaff !important; /* Brand-100 */
+  border-color: #c7d2fe !important;
+  color: #4f46e5 !important;
+}
+html.theme-day .nav-link {
+  color: #64748b !important;
+}
+html.theme-day .nav-link:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}

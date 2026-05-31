@@ -517,6 +517,7 @@ def classify_action(context_json: str) -> str:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
+            "reasoning": {"enabled": True},
         }
         if LLM_MODEL and LLM_MODEL != "local-model":
             payload["model"] = LLM_MODEL
