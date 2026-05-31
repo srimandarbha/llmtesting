@@ -4,10 +4,12 @@ import { createPortal } from 'react-dom'
 import { Dashboard } from './pages/Dashboard'
 import { IncidentDetail } from './pages/IncidentDetail'
 import { Analytics } from './pages/Analytics'
+import UpgradeAdvisor from './components/UpgradeAdvisor'
 
 const NAV_ITEMS = [
   { to: '/',          label: 'Dashboard',  icon: '⚡', exact: true },
   { to: '/analytics', label: 'Analytics',  icon: '📊', exact: false },
+  { to: '/upgrade-advisor', label: 'Advisor',  icon: '🛡️', exact: false },
 ]
 
 function Sidebar({ appName, appSubtext, appLogo }: { appName: string, appSubtext: string, appLogo: string | null }) {
@@ -193,6 +195,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/incidents/:id" element={<IncidentDetail />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/upgrade-advisor" element={<UpgradeAdvisor />} />
         </Routes>
       </Layout>
     </BrowserRouter>
