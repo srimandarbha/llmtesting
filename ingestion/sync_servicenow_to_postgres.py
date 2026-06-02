@@ -13,11 +13,11 @@ os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 DATABASE_TARGET = {
-    "dbname": "rhokp",
-    "user": "postgres",
-    "password": "postgres",
-    "host": "localhost",
-    "port": "5432"
+    "dbname": os.environ.get("DB_NAME", "rhokp"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", "postgres"),
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": os.environ.get("DB_PORT", "5432")
 }
 
 # State mappings for ServiceNow integer state codes to standard SRE strings
@@ -422,15 +422,16 @@ class ServiceNowSyncEngine:
                     )
                     # Create vector representation
                     embedding = self.embed_model.encode(text_chunk).tolist()
-                    embeddings_to_insert.append((sys_id, "incidents", text_chunk, embedding))
+                    embeddings_to_insert.append((sys_id, "incidents", text_chunk, embedding, self.embed_model_name, "1.0"))
                     
                 conn = psycopg2.connect(**self.db_config)
                 cur = conn.cursor()
                 cur.executemany("""
-                    INSERT INTO operational_knowledge_embeddings (source_id, source_table, text_chunk, embedding)
-                    VALUES (%s, %s, %s, %s);
+                    INSERT INTO operational_knowledge_embeddings (source_id, source_table, text_chunk, embedding, model_name, model_version)
+                    VALUES (%s, %s, %s, %s, %s, %s);
                 """, embeddings_to_insert)
                 conn.commit()
+
                 cur.close()
                 conn.close()
                 print(f"Generated and saved {len(embeddings_to_insert)} resolution vector embeddings.")

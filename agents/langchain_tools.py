@@ -304,6 +304,7 @@ def lookup_runbook(alert_name: str) -> str:
                             THEN (embedding <-> %s::vector) - 0.4
                             ELSE (embedding <-> %s::vector) END AS distance
                 FROM operational_knowledge_embeddings
+                WHERE model_name = %s AND model_version = '1.0'
                 UNION ALL
                 SELECT rhokp_id AS source_id, section_type AS source_table,
                        raw_text AS text_chunk,
@@ -311,13 +312,14 @@ def lookup_runbook(alert_name: str) -> str:
                             THEN (embedding <-> %s::vector) - 0.4
                             ELSE (embedding <-> %s::vector) END AS distance
                 FROM rhokp_knowledge
+                WHERE model_name = %s AND model_version = '1.0'
             ) AS combined
             WHERE distance < 0.75
             ORDER BY distance
             LIMIT 2;
             """,
-            (search_keyword, query_vector, query_vector,
-             search_keyword, query_vector, query_vector),
+            (search_keyword, query_vector, query_vector, EMBED_MODEL_NAME,
+             search_keyword, query_vector, query_vector, EMBED_MODEL_NAME),
         )
         rows = cur.fetchall()
         cur.close()

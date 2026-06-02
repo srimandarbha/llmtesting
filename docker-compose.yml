@@ -19,6 +19,7 @@ services:
       AWX_BASE_URL: ${AWX_BASE_URL:-http://host.docker.internal:8052}
       AWX_API_TOKEN: ${AWX_API_TOKEN:-changeme}
       USE_MOCK_AWX: ${USE_MOCK_AWX:-true}
+      USE_MOCK_LLM: ${USE_MOCK_LLM:-false}
       API_KEY: ${API_KEY:-dev-api-key-change-in-prod}
       BLAST_RADIUS_CAP: ${BLAST_RADIUS_CAP:-5}
       DEDUP_WINDOW_MINUTES: ${DEDUP_WINDOW_MINUTES:-10}
@@ -49,10 +50,12 @@ services:
       AWX_BASE_URL: ${AWX_BASE_URL:-http://host.docker.internal:8052}
       AWX_API_TOKEN: ${AWX_API_TOKEN:-changeme}
       USE_MOCK_AWX: ${USE_MOCK_AWX:-true}
+      USE_MOCK_LLM: ${USE_MOCK_LLM:-false}
       API_KEY: ${API_KEY:-dev-api-key-change-in-prod}
       BLAST_RADIUS_CAP: ${BLAST_RADIUS_CAP:-5}
       CELERY_BROKER_URL: sqla+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
       CELERY_RESULT_BACKEND: db+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
+      PYTHONPATH: /app
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: >
@@ -101,6 +104,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-}
       KAFKA_BROKER_URL: kafka:29092
       KAFKA_TOPIC: sre_alerts
+      PYTHONPATH: /app
       CELERY_BROKER_URL: sqla+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
       CELERY_RESULT_BACKEND: db+postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-}@host.docker.internal:5432/${DB_NAME:-rhokp}
     extra_hosts:

@@ -2,17 +2,20 @@ import json
 import time
 from kafka import KafkaProducer
 
+import os
+
 def publish():
+    broker = os.environ.get('KAFKA_BROKER_URL', 'localhost:9092')
     producer = KafkaProducer(
-        bootstrap_servers=['localhost:9092'],
+        bootstrap_servers=[broker],
         value_serializer=lambda m: json.dumps(m).encode('utf-8')
     )
     
     alert = {
-        "alert_name": "HighCPUUsage",
-        "cluster": "prod-cluster-1",
-        "namespace": "payment-service",
-        "hostname": "node-worker-2",
+        "alert_name": "KubeletHealthState",
+        "cluster": "auclo303",
+        "namespace": "machine-config-operator",
+        "hostname": "aul12345",
         "correlation_id": f"test-kafka-{int(time.time())}"
     }
     
