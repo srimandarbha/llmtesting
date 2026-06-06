@@ -284,10 +284,19 @@ def run_agent_pipeline(self, incident_id: str, alert_name: str, namespace: str,
 
     except Exception as exc:
         log.exception("Agent pipeline FAILED", error=str(exc))
-        _update_incident_status(incident_id, "FAILED")
-        _insert_timeline(incident_id, actor_type="system", action="Agent pipeline failed",
-                         to_status="FAILED", notes=str(exc))
-        self.retry(exc=exc)
+        if self.request.retries >= self.max_retries:
+            # Final retry exhausted — mark as permanently FAILED
+            _update_incident_status(incident_id, "FAILED")
+            _insert_timeline(incident_id, actor_type="system", action="Agent pipeline failed",
+                             to_status="FAILED", notes=str(exc))
+            notify_status_change(incident_id, "FAILED", actor="system")
+            raise  # Don't retry — let Celery mark it as failed
+        else:
+            # Retries remain — log but don't flip status to FAILED yet
+            _insert_timeline(incident_id, actor_type="system",
+                             action=f"Agent pipeline error (retry {self.request.retries + 1}/{self.max_retries})",
+                             notes=str(exc))
+            self.retry(exc=exc)
 
 
 # ---------------------------------------------------------------------------

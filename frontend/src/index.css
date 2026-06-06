@@ -232,3 +232,24 @@ html.theme-day .nav-link:hover {
   background-color: #f1f5f9 !important;
   color: #0f172a !important;
 }
+
+:root {
+  --chart-tooltip-bg: #1a1e35;
+  --chart-tooltip-border: #ffffff10;
+  --chart-grid-line: #ffffff08;
+  --chart-tick-text: #94a3b8;
+  --chart-cursor-bg: #ffffff08;
+  --chart-treemap-stroke: #1a1e35;
+  --chart-treemap-text: #ffffff;
+}
+
+html.theme-day {
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-border: #e2e8f0;
+  --chart-grid-line: #e2e8f0;
+  --chart-tick-text: #64748b;
+  --chart-cursor-bg: #f1f5f9;
+  --chart-treemap-stroke: #ffffff;
+  --chart-treemap-text: #ffffff;
+}
+

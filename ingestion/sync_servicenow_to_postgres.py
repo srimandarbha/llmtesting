@@ -282,7 +282,7 @@ class ServiceNowSyncEngine:
                 # 1. Ensure Cluster is present in DB
                 cur.execute("""
                     INSERT INTO clusters (cluster_id, name, openshift_version, environment)
-                    VALUES (%s, %s, '4.14.0', 'production')
+                    VALUES (%s, %s, '4.20.0', 'production')
                     ON CONFLICT (cluster_id) DO NOTHING;
                 """, (parsed["cluster_id"], f"Cluster {parsed['cluster_id']}"))
                 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { Clock, ShieldAlert, Cpu, CheckCircle2, ChevronRight, Activity, ArrowUpRight, Wrench } from 'lucide-react';
+import { apiClient } from '../api/client';
 
 interface CVE {
     cves: string[];
@@ -80,7 +81,7 @@ const CVEList = ({ cves, emptyMsg }: { cves: CVE[], emptyMsg: string }) => {
     return (
         <div className="space-y-2 mt-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
             {cves.map((cve, idx) => (
-                <div key={idx} className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-700/50 hover:border-slate-600 transition-colors">
+                <div key={idx} className="bg-surface-700/50 p-2.5 rounded-lg border border-white/5 hover:border-white/10 transition-colors">
                     <div className="flex justify-between items-center mb-1">
                         <span className="font-mono text-xs text-blue-300 font-bold">{cve.advisory_id}</span>
                         <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded ${
@@ -106,7 +107,7 @@ const UpgradeAdvisor = () => {
     const [activeTabs, setActiveTabs] = useState<Record<string, 'resolves'|'waiting'>>({});
 
     useEffect(() => {
-        axios.get('http://localhost:8000/api/clusters')
+        apiClient.get('/clusters')
             .then(res => setClusters(res.data))
             .catch(err => console.error("Error fetching clusters:", err));
     }, []);
@@ -115,7 +116,7 @@ const UpgradeAdvisor = () => {
         setSelectedCluster(clusterId);
         setLoading(true);
         try {
-            const res = await axios.get(`http://localhost:8000/api/clusters/${clusterId}/upgrade-advisor`);
+            const res = await apiClient.get(`/clusters/${clusterId}/upgrade-advisor`);
             setAdvisorData(res.data);
             
             // Default tabs to 'resolves'
@@ -134,7 +135,7 @@ const UpgradeAdvisor = () => {
     };
 
     return (
-        <div className="p-8 min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-blue-500/30">
+        <div className="p-8 min-h-screen text-slate-200 font-sans selection:bg-blue-500/30">
             <h1 className="text-4xl font-extrabold mb-8 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">
                 Advanced Upgrade Advisor
             </h1>
@@ -142,7 +143,7 @@ const UpgradeAdvisor = () => {
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
                 {/* Cluster Sidebar */}
                 <div className="lg:col-span-1 space-y-6">
-                    <div className="bg-slate-900/60 backdrop-blur-md rounded-2xl border border-slate-800 shadow-2xl p-6">
+                    <div className="glass-card p-6">
                         <h2 className="text-lg font-bold mb-4 text-slate-200 flex items-center gap-2">
                             <span>🏢</span> Your Clusters
                         </h2>
@@ -157,7 +158,7 @@ const UpgradeAdvisor = () => {
                                         className={`p-4 rounded-xl cursor-pointer transition-all duration-300 border relative overflow-hidden group ${
                                             selectedCluster === cluster.id 
                                                 ? 'bg-blue-600/10 border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.15)]' 
-                                                : 'bg-slate-800/40 border-transparent hover:bg-slate-800'
+                                                : 'bg-surface-700/50 border-transparent hover:bg-surface-700'
                                         }`}
                                     >
                                         <div className="flex justify-between items-start">
@@ -196,7 +197,7 @@ const UpgradeAdvisor = () => {
                         <div className="space-y-8 animate-fade-in-up">
                             
                             {/* Current Posture Header */}
-                            <div className="bg-slate-900/60 backdrop-blur-md rounded-3xl border border-slate-800 p-8 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-8">
+                            <div className="glass-card p-8 flex flex-col md:flex-row items-center justify-between gap-8">
                                 <div>
                                     <h2 className="text-xs uppercase tracking-widest text-slate-500 font-bold mb-1">Current Posture</h2>
                                     <div className="text-4xl font-mono font-bold text-slate-200 mb-2">v{advisorData.current_version}</div>
@@ -204,7 +205,7 @@ const UpgradeAdvisor = () => {
                                         You currently have <span className="text-rose-400 font-bold">{advisorData.current_cves.length} active vulnerabilities</span> impacting this cluster version.
                                     </p>
                                 </div>
-                                <div className="flex flex-col items-center bg-slate-950/50 p-6 rounded-2xl border border-slate-800/50 shadow-inner">
+                                <div className="flex flex-col items-center bg-surface-700/50 p-6 rounded-2xl border border-white/5 shadow-inner">
                                     <RiskGauge percent={advisorData.current_risk_percent} size="lg" />
                                     <span className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-3">Risk Index</span>
                                 </div>
@@ -221,10 +222,10 @@ const UpgradeAdvisor = () => {
                                         const activeTab = activeTabs[path.version] || 'resolves';
                                         
                                         return (
-                                            <div key={path.version} className={`relative flex flex-col bg-slate-900/40 backdrop-blur-xl border rounded-3xl p-6 shadow-xl transition-all duration-500 hover:-translate-y-1 ${
+                                            <div key={path.version} className={`relative flex flex-col glass-card p-6 transition-all duration-500 hover:-translate-y-1 ${
                                                 isBest 
                                                 ? 'border-emerald-500/50 shadow-[0_10px_30px_rgba(16,185,129,0.1)]' 
-                                                : 'border-slate-700/50 hover:border-slate-600'
+                                                : 'border-white/5 hover:border-white/10'
                                             }`}>
                                                 {isBest && (
                                                     <div className="absolute -top-3 -right-3 bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950 text-xs font-extrabold uppercase tracking-widest px-4 py-1.5 rounded-full shadow-lg border border-emerald-300 flex items-center gap-1 animate-pulse-slow">
@@ -246,7 +247,7 @@ const UpgradeAdvisor = () => {
                                                 </div>
 
                                                 {/* Tabs */}
-                                                <div className="flex border-b border-slate-800 mb-3">
+                                                <div className="flex border-b border-white/5 mb-3">
                                                     <button 
                                                         onClick={() => toggleTab(path.version, 'resolves')}
                                                         className={`flex-1 pb-2 text-xs font-bold uppercase tracking-widest transition-colors ${activeTab === 'resolves' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-500 hover:text-slate-400'}`}
@@ -272,7 +273,7 @@ const UpgradeAdvisor = () => {
                                                 <button className={`mt-6 w-full py-3.5 rounded-xl font-bold text-sm tracking-wide transition-all shadow-lg ${
                                                     isBest 
                                                     ? 'bg-emerald-500 hover:bg-emerald-400 text-emerald-950 shadow-emerald-500/20' 
-                                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 shadow-transparent'
+                                                    : 'btn-ghost shadow-transparent'
                                                 }`}>
                                                     Execute Upgrade to {path.version}
                                                 </button>

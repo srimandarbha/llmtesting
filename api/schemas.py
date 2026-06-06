@@ -87,6 +87,8 @@ class IncidentOut(BaseModel):
     risk_tier: str | None
     llm_confidence: float | None
     llm_intent_json: dict | None
+    analysis_summary: str | None = None
+    escalate_to: str | None = None
     awx_job_id: str | None
     created_at: datetime
     updated_at: datetime
@@ -165,8 +167,42 @@ class LLMAccuracyStats(BaseModel):
     total_high_risk: int
 
 
+class FlappingAlert(BaseModel):
+    alert_name: str
+    cluster: str
+    flapping_count: int
+    reopen_count: int
+
+class SentimentTrend(BaseModel):
+    date: str
+    average_score: float
+    total_resolutions: int
+
+class RedHatCaseSummary(BaseModel):
+    open_cases: int
+    critical_escalation_pct: float
+    avg_vendor_mttr_days: float
+
+class ComponentIncident(BaseModel):
+    component: str
+    incident_count: int
+
+class FleetRisk(BaseModel):
+    average_risk_pct: int
+    critical_cves_active: int
+
+class EnvironmentDistribution(BaseModel):
+    environment: str
+    incident_count: int
+
 class AnalyticsSummaryOut(BaseModel):
     mttr_by_cluster: list[MTTRDataPoint]
     resolution_stats: ResolutionStats
     llm_accuracy: LLMAccuracyStats
     top_recurring_alerts: list[dict[str, Any]]
+    flapping_alerts: list[FlappingAlert]
+    sentiment_trend: list[SentimentTrend]
+    redhat_cases_summary: RedHatCaseSummary
+    component_incidents: list[ComponentIncident]
+    fleet_risk: FleetRisk
+    environment_distribution: list[EnvironmentDistribution]

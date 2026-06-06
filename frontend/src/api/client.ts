@@ -78,6 +78,53 @@ export interface DashboardCounts {
   failed: number
 }
 
+export interface FlappingAlert {
+  alert_name: string
+  cluster: string
+  flapping_count: number
+  reopen_count: number
+}
+
+export interface SentimentTrend {
+  date: string
+  average_score: number
+  total_resolutions: number
+}
+
+export interface RedHatCaseSummary {
+  open_cases: number
+  critical_escalation_pct: number
+  avg_vendor_mttr_days: number
+}
+
+export interface ComponentIncident {
+  component: string
+  incident_count: number
+}
+
+export interface FleetRisk {
+  average_risk_pct: number
+  critical_cves_active: number
+}
+
+export interface EnvironmentDistribution {
+  environment: string
+  incident_count: number
+}
+
+export interface AnalyticsSummary {
+  mttr_by_cluster: any[]
+  resolution_stats: any
+  llm_accuracy: any
+  top_recurring_alerts: any[]
+  flapping_alerts: FlappingAlert[]
+  sentiment_trend: SentimentTrend[]
+  redhat_cases_summary: RedHatCaseSummary
+  component_incidents: ComponentIncident[]
+  fleet_risk: FleetRisk
+  environment_distribution: EnvironmentDistribution[]
+}
+
 // API calls
 export const api = {
   getDashboardCounts: () =>
@@ -102,7 +149,7 @@ export const api = {
     apiClient.post(`/incidents/${id}/escalate`, { reason, user_id }).then(r => r.data),
 
   getAnalytics: () =>
-    apiClient.get('/analytics/summary').then(r => r.data),
+    apiClient.get<AnalyticsSummary>('/analytics/summary').then(r => r.data),
 
   ingestAlert: (payload: Record<string, string>) =>
     apiClient.post('/alerts/ingest', payload).then(r => r.data),

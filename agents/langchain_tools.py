@@ -19,6 +19,7 @@ import textwrap
 from typing import Literal, Optional
 
 import psycopg2
+import requests
 # pyrefly: ignore [missing-import]
 from langchain_core.tools import tool
 # pyrefly: ignore [missing-import]
@@ -332,7 +333,7 @@ def lookup_runbook(alert_name: str) -> str:
                 {
                     "source_id": source_id,
                     "source_table": source_table,
-                    "similarity": round(1.0 - float(distance), 4),
+                    "similarity": round(min(1.0, 1.0 - float(distance)), 4),
                     "excerpt": textwrap.shorten(text_chunk, width=500),
                 }
             )

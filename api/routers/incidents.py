@@ -44,7 +44,8 @@ router = APIRouter(prefix="/incidents", tags=["Incidents"])
 def _fetch_incident(cur, incident_id: str) -> dict:
     cur.execute(
         "SELECT id, correlation_id, cluster, namespace, alert_name, hostname, "
-        "status, risk_tier, llm_confidence, llm_intent_json, awx_job_id, "
+        "status, risk_tier, llm_confidence, llm_intent_json, analysis_summary, "
+        "escalate_to, awx_job_id, "
         "created_at, updated_at, resolved_at "
         "FROM incidents_v2 WHERE id = %s",
         (incident_id,),
@@ -54,7 +55,8 @@ def _fetch_incident(cur, incident_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Incident not found")
     cols = [
         "id", "correlation_id", "cluster", "namespace", "alert_name", "hostname",
-        "status", "risk_tier", "llm_confidence", "llm_intent_json", "awx_job_id",
+        "status", "risk_tier", "llm_confidence", "llm_intent_json", "analysis_summary",
+        "escalate_to", "awx_job_id",
         "created_at", "updated_at", "resolved_at",
     ]
     return dict(zip(cols, row))
@@ -157,7 +159,8 @@ async def list_incidents(
 
     cur.execute(
         f"SELECT id, correlation_id, cluster, namespace, alert_name, hostname, "
-        f"status, risk_tier, llm_confidence, llm_intent_json, awx_job_id, "
+        f"status, risk_tier, llm_confidence, llm_intent_json, analysis_summary, "
+        f"escalate_to, awx_job_id, "
         f"created_at, updated_at, resolved_at "
         f"FROM incidents_v2 {where_sql} ORDER BY created_at DESC LIMIT %s OFFSET %s",
         params + [page_size, offset],
@@ -168,7 +171,8 @@ async def list_incidents(
 
     cols = [
         "id", "correlation_id", "cluster", "namespace", "alert_name", "hostname",
-        "status", "risk_tier", "llm_confidence", "llm_intent_json", "awx_job_id",
+        "status", "risk_tier", "llm_confidence", "llm_intent_json", "analysis_summary",
+        "escalate_to", "awx_job_id",
         "created_at", "updated_at", "resolved_at",
     ]
     items = [dict(zip(cols, r)) for r in rows]

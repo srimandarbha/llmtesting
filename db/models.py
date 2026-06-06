@@ -72,6 +72,8 @@ class Incident(Base):
     risk_tier: Mapped[str | None] = mapped_column(String)
     llm_confidence: Mapped[float | None] = mapped_column(Numeric(5, 4))
     llm_intent_json: Mapped[dict | None] = mapped_column(JSONB)
+    analysis_summary: Mapped[str | None] = mapped_column(Text)
+    escalate_to: Mapped[str | None] = mapped_column(String)
     awx_job_id: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), nullable=False

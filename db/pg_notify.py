@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import select
 
 import psycopg2
 import psycopg2.extensions
@@ -81,7 +80,9 @@ async def listen_for_pg_notifications(manager) -> None:
     loop = asyncio.get_running_loop()
 
     def _blocking_listen():
-        """Runs in a thread — blocks on select() waiting for NOTIFY."""
+        """Runs in a thread — polls for NOTIFY using conn.poll() (cross-platform, works on Windows)."""
+        import time
+
         conn = psycopg2.connect(**DATABASE_TARGET)
         conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
         cur = conn.cursor()
@@ -89,9 +90,7 @@ async def listen_for_pg_notifications(manager) -> None:
         logger.info("LISTEN registered on channel '%s'", PG_CHANNEL)
 
         while True:
-            # select() with 5s timeout so we can check for shutdown
-            if select.select([conn], [], [], 5) == ([], [], []):
-                continue  # Timeout — poll again
+            # poll() is cross-platform (works on Windows unlike select.select with psycopg2 FDs)
             conn.poll()
             while conn.notifies:
                 notify = conn.notifies.pop(0)
@@ -116,5 +115,7 @@ async def listen_for_pg_notifications(manager) -> None:
                     )
                 except Exception as e:
                     logger.error("Failed to process NOTIFY payload: %s", e)
+            # Sleep briefly to avoid busy-waiting (5s matches previous select timeout)
+            time.sleep(1)
 
     await loop.run_in_executor(None, _blocking_listen)
