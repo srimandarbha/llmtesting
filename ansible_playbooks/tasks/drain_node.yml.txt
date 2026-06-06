@@ -1,8 +1,0 @@
----
-- name: Drain Cluster Node
-  ansible.builtin.debug:
-    msg: "MOCK: Cordoning node {{ target }} and executing 'oc drain --ignore-daemonsets --delete-emptydir-data'."
-
-- name: Await Node Rebalance
-  ansible.builtin.debug:
-    msg: "MOCK: Workloads safely evicted to alternative nodes."
