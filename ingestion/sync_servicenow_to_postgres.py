@@ -167,8 +167,8 @@ class ServiceNowSyncEngine:
                 "state": "1",  # New
                 "sys_created_on": now_str,
                 "sys_updated_on": now_str,
-                "short_description": "Alert 'CoreDNSErrorsHigh' firing in namespace 'openshift-dns' on cluster 'prod-us-east-1'",
-                "u_cluster_id": "prod-us-east-1",
+                "short_description": "Alert 'CoreDNSErrorsHigh' firing in namespace 'openshift-dns' on cluster 'nzclu101'",
+                "u_cluster_id": "nzclu101",
                 "u_alert_name": "CoreDNSErrorsHigh",
                 "u_namespace": "openshift-dns",
                 "u_operator": "cluster-dns-operator",
@@ -335,9 +335,45 @@ class ServiceNowSyncEngine:
                     ON CONFLICT (sys_id, sys_updated_on) DO NOTHING;
                 """, (sys_id, parsed["state"], parsed["sys_updated_on"], parsed["worknotes"], sent_lbl, sent_scr))
                 
+                # 6.5 Bridge to incidents_v2 (AI Agent Pipeline)
+                cur.execute("""
+                    SELECT id, status FROM incidents_v2 
+                    WHERE cluster = %s AND alert_name = %s 
+                    ORDER BY created_at DESC LIMIT 1
+                """, (parsed["cluster_id"], parsed["alertname"]))
+                v2_incident = cur.fetchone()
+
+                if v2_incident:
+                    v2_id, v2_status = v2_incident
+                    sys_updated_iso = parsed["sys_updated_on"].isoformat()
+                    
+                    # Check if we already synced this exact update
+                    cur.execute("""
+                        SELECT 1 FROM incident_timeline 
+                        WHERE incident_id = %s AND metadata_json->>'sys_updated_on' = %s
+                    """, (v2_id, sys_updated_iso))
+                    
+                    if not cur.fetchone():
+                        action_str = "ServiceNow ticket resolved" if parsed["state"] in ("Resolved", "Closed") else "ServiceNow ticket updated"
+                        to_status = "RESOLVED" if parsed["state"] in ("Resolved", "Closed") else None
+                        
+                        cur.execute("""
+                            INSERT INTO incident_timeline (incident_id, actor_type, actor_id, action, notes, metadata_json, to_status)
+                            VALUES (%s, 'human', 'servicenow', %s, %s, %s, %s)
+                        """, (str(v2_id), action_str, parsed["worknotes"], json.dumps({"sys_id": sys_id, "sys_updated_on": sys_updated_iso}), to_status))
+                        
+                        if to_status == "RESOLVED" and v2_status != "RESOLVED":
+                            cur.execute("""
+                                UPDATE incidents_v2 SET status = 'RESOLVED', resolved_at = NOW() WHERE id = %s
+                            """, (str(v2_id),))
+                            print(f"--> Linked and resolved AI incident {v2_id} from ServiceNow update.")
+                        else:
+                            print(f"--> Appended SNOW worknotes to AI incident {v2_id}.")
+                
                 # Track closed/resolved incidents for RAG vectorization
                 if parsed["state"] in ("Resolved", "Closed"):
                     resolved_incidents.append((sys_id, parsed["number"], parsed["short_description"], parsed["worknotes"], sent_lbl))
+
             
             # 7. Recalculate Recurrence Aggregates for modified alert fingerprints
             for fp in processed_fingerprints:

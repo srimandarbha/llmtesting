@@ -130,7 +130,7 @@ export const api = {
   getDashboardCounts: () =>
     apiClient.get<DashboardCounts>('/dashboard/counts').then(r => r.data),
 
-  getIncidents: (params?: { status?: string; cluster?: string; page?: number }) =>
+  getIncidents: (params?: { status?: string; cluster?: string; alert_name?: string; page?: number }) =>
     apiClient.get('/incidents', { params }).then(r => r.data),
 
   getIncident: (id: string) =>
@@ -153,4 +153,93 @@ export const api = {
 
   ingestAlert: (payload: Record<string, string>) =>
     apiClient.post('/alerts/ingest', payload).then(r => r.data),
+
+  getHandovers: (params?: {
+    cluster?: string
+    handover_type?: string
+    priority?: string
+    action_required?: boolean
+    limit?: number
+  }) =>
+    apiClient.get<Handover[]>('/handovers', { params }).then(r => r.data),
+
+  getHandoverClusters: () =>
+    apiClient.get<string[]>('/handovers/clusters').then(r => r.data),
+
+  createHandover: (payload: {
+    author: string
+    shift_identifier: string
+    cluster: string
+    handover_type: string
+    priority: string
+    action_required: boolean
+    related_incidents: string
+    message: string
+    start_time?: string | null
+    end_time?: string | null
+    upgraded_version?: string | null
+    operator_name?: string | null
+  }) =>
+    apiClient.post<Handover>('/handovers', payload).then(r => r.data),
+
+  getTickerHandovers: () =>
+    apiClient.get<Handover[]>('/handovers/active_ticker').then(r => r.data),
+
+  updateHandover: (id: string, payload: {
+    is_active?: boolean
+    resolution_notes?: string
+    action_required?: boolean
+  }) =>
+    apiClient.patch<Handover>(`/handovers/${id}`, payload).then(r => r.data),
+
+  chatWithContext: (payload: { query: string; timeframe_hours: number }) =>
+    apiClient.post<{ answer: string }>('/chat', payload).then(r => r.data),
+
+  previewSummary: () =>
+    apiClient.post<{ shift_name: string; preview_text: string }>('/summaries/preview').then(r => r.data),
+
+  saveSummary: (payload: { shift_name: string; summary_text: string }) =>
+    apiClient.post<{ status: string; id: string }>('/summaries/save', payload).then(r => r.data),
+
+  getHistoricalSummaries: () =>
+    apiClient.get<HistoricalSummary[]>('/summaries/historical').then(r => r.data),
 }
+
+export interface HistoricalSummary {
+  id: string
+  shift_name: string
+  summary_text: string
+  is_auto_generated: boolean
+  created_at: string
+}
+
+export interface Handover {
+  id: string
+  author: string
+  shift_identifier: string
+  cluster: string
+  handover_type: HandoverType
+  priority: HandoverPriority
+  action_required: boolean
+  related_incidents: string
+  message: string
+  created_at: string
+  start_time: string | null
+  end_time: string | null
+  is_active: boolean
+  resolution_notes: string | null
+  upgraded_version: string | null
+  operator_name: string | null
+}
+
+export type HandoverType =
+  | 'handover'
+  | 'maintenance'
+  | 'upgrade'
+  | 'operator_upgrade'
+  | 'incident_followup'
+  | 'change_freeze'
+  | 'escalation'
+
+export type HandoverPriority = 'low' | 'medium' | 'high' | 'critical'
+

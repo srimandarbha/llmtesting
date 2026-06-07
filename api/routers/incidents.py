@@ -137,8 +137,9 @@ async def list_incidents(
     page_size: int = Query(25, ge=1, le=100),
     status_filter: str | None = Query(None, alias="status"),
     cluster: str | None = None,
+    alert_name: str | None = None,
 ):
-    """Return paginated list of incidents, optionally filtered by status and cluster."""
+    """Return paginated list of incidents, optionally filtered by status, cluster, and alert name."""
     offset = (page - 1) * page_size
     conn = psycopg2.connect(**DATABASE_TARGET)
     cur = conn.cursor()
@@ -151,6 +152,9 @@ async def list_incidents(
     if cluster:
         where_clauses.append("cluster = %s")
         params.append(cluster)
+    if alert_name:
+        where_clauses.append("alert_name = %s")
+        params.append(alert_name)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 

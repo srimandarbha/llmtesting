@@ -494,3 +494,103 @@ def check_approval_timeout(incident_id: str):
             )
     except Exception as e:
         log.error("check_approval_timeout failed", error=str(e))
+
+# ---------------------------------------------------------------------------
+# Task 6: Automatic Shift Summaries
+# ---------------------------------------------------------------------------
+
+@celery_app.task(name="worker.tasks.generate_auto_shift_summary")
+def generate_auto_shift_summary():
+    """
+    Runs at HH:30 for the shift boundaries (00:30, 08:30, 16:30).
+    Checks if a summary for the previous shift was manually created.
+    If not, fetches data, generates a summary, vectorizes, and saves.
+    """
+    from api.routers.summaries import get_previous_shift_window, get_embed_model
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from agents.langchain_agent import _get_llm
+    
+    log = logger.bind(task="generate_auto_shift_summary")
+    shift_name, start_time, end_time = get_previous_shift_window()
+    
+    try:
+        with _db_conn() as conn:
+            cur = conn.cursor()
+            
+            # Check if one already exists for this shift_name
+            cur.execute(
+                "SELECT COUNT(*) FROM historical_shift_summaries WHERE shift_name = %s",
+                (shift_name,)
+            )
+            if cur.fetchone()[0] > 0:
+                log.info(f"Summary for {shift_name} already exists. Skipping auto-generation.")
+                return
+                
+            log.info(f"Generating auto-summary for {shift_name}")
+            
+            cur.execute(
+                """
+                SELECT alert_name, cluster, status, risk_tier, created_at
+                FROM incidents_v2 
+                WHERE created_at >= %s AND created_at < %s
+                ORDER BY created_at ASC
+                """,
+                (start_time, end_time)
+            )
+            incidents = cur.fetchall()
+            
+            cur.execute(
+                """
+                SELECT author, message, created_at 
+                FROM shift_handovers 
+                WHERE created_at >= %s AND created_at < %s
+                ORDER BY created_at ASC
+                """,
+                (start_time, end_time)
+            )
+            handovers = cur.fetchall()
+            
+            context = f"--- INCIDENTS FROM {start_time} TO {end_time} ---\n"
+            if not incidents:
+                context += "No incidents recorded.\n"
+            for inc in incidents:
+                context += f"- Alert: {inc[0]} | Cluster: {inc[1]} | Status: {inc[2]} | Risk: {inc[3]}\n"
+                
+            context += f"\n--- SHIFT HANDOVERS FROM {start_time} TO {end_time} ---\n"
+            if not handovers:
+                context += "No handovers recorded.\n"
+            for ho in handovers:
+                context += f"- {ho[0]}: {ho[1]}\n"
+                
+            system_prompt = (
+                "You are an SRE shift supervisor. Write a clear, comprehensive markdown report "
+                "summarizing the events of the shift based on the provided logs. Group related events, "
+                "highlight ongoing maintenance or issues, and provide a quick executive summary at the top."
+            )
+            
+            user_prompt = f"Shift Log:\n{context}\n\nPlease generate the Final Shift Report."
+            
+            llm = _get_llm()
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            response = llm.invoke(messages)
+            summary_text = response.content
+            
+            model = get_embed_model()
+            vector_coord = model.encode(summary_text).tolist()
+            
+            new_id = uuid.uuid4()
+            cur.execute(
+                """
+                INSERT INTO historical_shift_summaries (id, shift_name, summary_text, embedding, is_auto_generated)
+                VALUES (%s, %s, %s, %s::vector, TRUE)
+                """,
+                (str(new_id), shift_name, summary_text, vector_coord)
+            )
+            
+            log.info(f"Auto-summary saved successfully for {shift_name}")
+            
+    except Exception as e:
+        log.error("Failed to generate auto-summary", error=str(e))

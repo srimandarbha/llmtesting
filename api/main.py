@@ -23,6 +23,9 @@ from api.routers.alerts import router as alerts_router
 from api.routers.analytics import router as analytics_router
 from api.routers.incidents import router as incidents_router
 from api.routers.cve_advisor import router as cve_advisor_router
+from api.routers.handovers import router as handovers_router
+from api.routers.chat import router as chat_router
+from api.routers.summaries import router as summaries_router
 from api.websocket import manager
 from db.pg_notify import listen_for_pg_notifications
 from db.session import close_engine
@@ -88,6 +91,9 @@ app.include_router(alerts_router)
 app.include_router(incidents_router)
 app.include_router(analytics_router)
 app.include_router(cve_advisor_router)
+app.include_router(handovers_router)
+app.include_router(chat_router)
+app.include_router(summaries_router)
 
 
 # ---------------------------------------------------------------------------

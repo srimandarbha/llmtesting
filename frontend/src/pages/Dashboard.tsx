@@ -47,6 +47,8 @@ const STATUS_FILTERS = [
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate()
   const [statusFilter, setStatusFilter] = React.useState('')
+  const [clusterFilter, setClusterFilter] = React.useState('')
+  const [alertFilter, setAlertFilter] = React.useState('')
   const [page, setPage] = React.useState(1)
 
   const { data: counts } = useQuery({
@@ -56,8 +58,13 @@ export const Dashboard: React.FC = () => {
   })
 
   const { data: incidentsData, isLoading } = useQuery({
-    queryKey: ['incidents', statusFilter, page],
-    queryFn: () => api.getIncidents({ status: statusFilter || undefined, page }),
+    queryKey: ['incidents', statusFilter, clusterFilter, alertFilter, page],
+    queryFn: () => api.getIncidents({ 
+      status: statusFilter || undefined,
+      cluster: clusterFilter || undefined,
+      alert_name: alertFilter || undefined,
+      page 
+    }),
     refetchInterval: 15_000,
   })
 
@@ -105,21 +112,39 @@ export const Dashboard: React.FC = () => {
         />
       </div>
 
-      {/* Filter pills */}
-      <div className="flex flex-wrap gap-2">
-        {STATUS_FILTERS.map(f => (
-          <button
-            key={f.value}
-            onClick={() => { setStatusFilter(f.value); setPage(1) }}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
-              statusFilter === f.value
-                ? 'bg-brand-500 text-white shadow-lg shadow-brand-900/40'
-                : 'bg-surface-700 text-slate-400 hover:text-white hover:bg-surface-600'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+      {/* Filters */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-2">
+          {STATUS_FILTERS.map(f => (
+            <button
+              key={f.value}
+              onClick={() => { setStatusFilter(f.value); setPage(1) }}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
+                statusFilter === f.value
+                  ? 'bg-brand-500 text-white shadow-lg shadow-brand-900/40'
+                  : 'bg-surface-700 text-slate-400 hover:text-white hover:bg-surface-600'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <input 
+            type="text" 
+            placeholder="Filter by Cluster..." 
+            value={clusterFilter}
+            onChange={e => { setClusterFilter(e.target.value); setPage(1) }}
+            className="bg-surface-700 text-sm text-slate-200 px-3 py-1.5 rounded border border-white/10 focus:outline-none focus:border-brand-500 w-64 transition-colors duration-200"
+          />
+          <input 
+            type="text" 
+            placeholder="Filter by Alert Name..." 
+            value={alertFilter}
+            onChange={e => { setAlertFilter(e.target.value); setPage(1) }}
+            className="bg-surface-700 text-sm text-slate-200 px-3 py-1.5 rounded border border-white/10 focus:outline-none focus:border-brand-500 w-64 transition-colors duration-200"
+          />
+        </div>
       </div>
 
       {/* Incidents table */}

@@ -63,3 +63,20 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # one task at a time per worker (safer for agent workloads)
     worker_max_tasks_per_child=100,
 )
+
+from celery.schedules import crontab
+
+celery_app.conf.beat_schedule = {
+    "generate-shift-summary-morning": {
+        "task": "worker.tasks.generate_auto_shift_summary",
+        "schedule": crontab(hour=0, minute=30),
+    },
+    "generate-shift-summary-afternoon": {
+        "task": "worker.tasks.generate_auto_shift_summary",
+        "schedule": crontab(hour=8, minute=30),
+    },
+    "generate-shift-summary-night": {
+        "task": "worker.tasks.generate_auto_shift_summary",
+        "schedule": crontab(hour=16, minute=30),
+    },
+}

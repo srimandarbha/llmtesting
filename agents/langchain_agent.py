@@ -145,7 +145,7 @@ Final Answer: {
 
     return ChatOpenAI(
         base_url=LLM_API_URL.replace("/v1/chat/completions", "/v1"),
-        api_key=LLM_API_KEY,
+        api_key=LLM_API_KEY if LLM_API_KEY else "local",
         model=LLM_MODEL,
         temperature=0.1,
         max_retries=2,

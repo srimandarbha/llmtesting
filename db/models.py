@@ -283,3 +283,20 @@ class ClusterInventory(Base):
 
     def __repr__(self) -> str:
         return f"<ClusterInventory id={self.id} name={self.name} version={self.current_version}>"
+
+# ---------------------------------------------------------------------------
+# Shift Handovers
+# ---------------------------------------------------------------------------
+
+class ShiftHandover(Base):
+    __tablename__ = "shift_handovers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    author: Mapped[str] = mapped_column(String, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<ShiftHandover id={self.id} author={self.author}>"

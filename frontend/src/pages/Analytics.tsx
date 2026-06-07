@@ -24,6 +24,7 @@ export const Analytics: React.FC = () => {
     recurringIncidents: true,
     flappingLeaderboard: true,
   })
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false)
 
   useEffect(() => {
     const saved = localStorage.getItem('analytics_panels')
@@ -32,10 +33,15 @@ export const Analytics: React.FC = () => {
     }
   }, [])
 
-  const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selected = Array.from(e.target.selectedOptions, option => option.value);
+  const togglePanel = (key: keyof typeof visiblePanels) => {
+    const next = { ...visiblePanels, [key]: !visiblePanels[key] };
+    setVisiblePanels(next);
+    localStorage.setItem('analytics_panels', JSON.stringify(next));
+  }
+
+  const toggleAllPanels = (val: boolean) => {
     const next = Object.keys(visiblePanels).reduce((acc, key) => {
-      acc[key as keyof typeof visiblePanels] = selected.includes(key);
+      acc[key as keyof typeof visiblePanels] = val;
       return acc;
     }, {} as typeof visiblePanels);
     setVisiblePanels(next);
@@ -92,23 +98,53 @@ export const Analytics: React.FC = () => {
         </div>
         
         {/* Panel Toggles */}
-        <div className="glass-card p-3 flex gap-3 items-center bg-slate-900/50">
-          <span className="text-xs font-semibold text-slate-400 uppercase">Visible Panels:</span>
-          <select 
-            multiple
-            value={Object.entries(visiblePanels).filter(([, v]) => v).map(([k]) => k)}
-            onChange={handleSelectChange}
-            className="text-sm bg-slate-800 border border-slate-700 text-slate-200 rounded p-1 focus:ring-brand-500 focus:border-brand-500 min-w-[250px] max-h-28 overflow-y-auto outline-none"
+        <div className="relative">
+          <button 
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className="btn btn-ghost bg-slate-900/50 text-sm border-slate-700 hover:bg-slate-800"
           >
-            {Object.keys(visiblePanels).map((key) => (
-              <option key={key} value={key} className="py-1 px-2 mb-0.5 rounded cursor-pointer checked:bg-brand-500/20 checked:text-brand-300 hover:bg-slate-700">
-                {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-              </option>
-            ))}
-          </select>
-          <span className="text-[10px] text-slate-500 italic max-w-[100px] leading-tight">
-            Hold Ctrl/Cmd to select multiple
-          </span>
+            <span className="text-xs font-semibold text-slate-400 uppercase mr-2">Visible Panels</span>
+            <span className="text-slate-300 font-bold bg-surface-700 px-2 py-0.5 rounded text-xs border border-white/5">
+              {Object.values(visiblePanels).filter(Boolean).length}/{Object.keys(visiblePanels).length}
+            </span>
+            <span className="ml-2 text-slate-500 text-xs no-invert">▼</span>
+          </button>
+          
+          {isDropdownOpen && (
+            <>
+              {/* Invisible backdrop to close dropdown when clicking outside */}
+              <div className="fixed inset-0 z-40" onClick={() => setIsDropdownOpen(false)} />
+              
+              <div className="absolute right-0 top-full mt-2 w-64 bg-surface-800 border border-white/10 rounded-xl shadow-2xl z-50 p-2 max-h-96 overflow-y-auto animate-fade-in">
+                <div className="flex items-center justify-between px-3 py-2 mb-2 border-b border-white/5">
+                  <button 
+                    onClick={() => toggleAllPanels(true)}
+                    className="text-xs font-semibold text-brand-400 hover:text-brand-300 transition-colors"
+                  >
+                    ✓ Select All
+                  </button>
+                  <button 
+                    onClick={() => toggleAllPanels(false)}
+                    className="text-xs font-medium text-slate-500 hover:text-slate-400 transition-colors"
+                  >
+                    Clear All
+                  </button>
+                </div>
+                
+                {Object.entries(visiblePanels).map(([key, isVisible]) => (
+                  <label key={key} className="flex items-center gap-3 px-3 py-2 hover:bg-white/5 rounded-lg cursor-pointer transition-colors text-sm text-slate-300">
+                    <input 
+                      type="checkbox" 
+                      className="rounded border-slate-600 bg-surface-700 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-800 w-4 h-4 cursor-pointer"
+                      checked={isVisible}
+                      onChange={() => togglePanel(key as keyof typeof visiblePanels)}
+                    />
+                    <span>{key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -333,7 +369,7 @@ export const Analytics: React.FC = () => {
               data={component_incidents.map((c: any) => ({ name: c.component, size: c.incident_count }))}
               dataKey="size"
               stroke="var(--chart-treemap-stroke)"
-              content={(props: any) => {
+              content={((props: any) => {
                 const { x, y, width, height, name, index } = props;
                 return (
                   <g>
@@ -345,7 +381,7 @@ export const Analytics: React.FC = () => {
                       fill={COLORS[index % COLORS.length]}
                       stroke="var(--chart-treemap-stroke)"
                     />
-                    {width > 50 && height > 20 && (
+                    {width > 50 && height > 30 && (
                       <text
                         x={x + width / 2}
                         y={y + height / 2}
@@ -359,7 +395,7 @@ export const Analytics: React.FC = () => {
                     )}
                   </g>
                 );
-              }}
+              }) as any}
             >
               <Tooltip
                 contentStyle={{ background: 'var(--chart-tooltip-bg)', border: '1px solid var(--chart-tooltip-border)', borderRadius: 8 }}
