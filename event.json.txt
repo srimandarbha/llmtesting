@@ -1,8 +1,0 @@
-{
-  "cluster": "emclu203",
-  "hostname": "emclu203.prod.openshift.com",
-  "correlation_id": "emclu203-20260609121120",
-  "namespace": "openshift-kube-apiserver",
-  "startAt": "2026-05-30T23:20:40Z",
-  "alertname": "KubeAPIDown"
-}

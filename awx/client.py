@@ -175,7 +175,7 @@ class AWXClient:
 def get_awx_client() -> AWXClient:
     """
     Returns the real AWXClient.
-    Import awx.mock_client.MockAWXClient for local development.
+    Import simulation.mock_client.MockAWXClient for local development.
     Use agents.config.USE_MOCK_AWX to switch automatically in worker/tasks.py.
     """
     return AWXClient()

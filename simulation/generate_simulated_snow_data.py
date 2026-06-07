@@ -212,11 +212,11 @@ def generate_mock_data(conn):
     
     # 1. Clusters (5 clusters)
     clusters_data = [
-        ("nzclu101", "nzclu101", "Production New Zealand", "4.14.12", "production"),
-        ("emclu202", "emclu202", "Production Emirates", "4.14.12", "production"),
-        ("auclo303", "auclo303", "Staging Australia", "4.15.2", "staging"),
-        ("inclu404", "inclu404", "Development India", "4.16.0-rc2", "development"),
-        ("nzclu102", "nzclu102", "Disaster Recovery New Zealand", "4.14.12", "dr")
+        ("nzclu101", "nzclu101", "Production New Zealand", "4.20.12", "production"),
+        ("emclu202", "emclu202", "Production Emirates", "4.20.12", "production"),
+        ("auclo303", "auclo303", "Staging Australia", "4.21.2", "staging"),
+        ("inclu404", "inclu404", "Development India", "4.22.0-rc2", "development"),
+        ("nzclu102", "nzclu102", "Disaster Recovery New Zealand", "4.20.12", "dr")
     ]
     
     print("Inserting clusters...")

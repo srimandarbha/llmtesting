@@ -44,7 +44,8 @@ router = APIRouter(prefix="/incidents", tags=["Incidents"])
 def _fetch_incident(cur, incident_id: str) -> dict:
     cur.execute(
         "SELECT id, correlation_id, cluster, namespace, alert_name, hostname, "
-        "status, risk_tier, llm_confidence, llm_intent_json, awx_job_id, "
+        "status, risk_tier, llm_confidence, llm_intent_json, analysis_summary, "
+        "escalate_to, awx_job_id, "
         "created_at, updated_at, resolved_at "
         "FROM incidents_v2 WHERE id = %s",
         (incident_id,),
@@ -54,7 +55,8 @@ def _fetch_incident(cur, incident_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Incident not found")
     cols = [
         "id", "correlation_id", "cluster", "namespace", "alert_name", "hostname",
-        "status", "risk_tier", "llm_confidence", "llm_intent_json", "awx_job_id",
+        "status", "risk_tier", "llm_confidence", "llm_intent_json", "analysis_summary",
+        "escalate_to", "awx_job_id",
         "created_at", "updated_at", "resolved_at",
     ]
     return dict(zip(cols, row))
@@ -135,8 +137,9 @@ async def list_incidents(
     page_size: int = Query(25, ge=1, le=100),
     status_filter: str | None = Query(None, alias="status"),
     cluster: str | None = None,
+    alert_name: str | None = None,
 ):
-    """Return paginated list of incidents, optionally filtered by status and cluster."""
+    """Return paginated list of incidents, optionally filtered by status, cluster, and alert name."""
     offset = (page - 1) * page_size
     conn = psycopg2.connect(**DATABASE_TARGET)
     cur = conn.cursor()
@@ -149,6 +152,9 @@ async def list_incidents(
     if cluster:
         where_clauses.append("cluster = %s")
         params.append(cluster)
+    if alert_name:
+        where_clauses.append("alert_name = %s")
+        params.append(alert_name)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -157,7 +163,8 @@ async def list_incidents(
 
     cur.execute(
         f"SELECT id, correlation_id, cluster, namespace, alert_name, hostname, "
-        f"status, risk_tier, llm_confidence, llm_intent_json, awx_job_id, "
+        f"status, risk_tier, llm_confidence, llm_intent_json, analysis_summary, "
+        f"escalate_to, awx_job_id, "
         f"created_at, updated_at, resolved_at "
         f"FROM incidents_v2 {where_sql} ORDER BY created_at DESC LIMIT %s OFFSET %s",
         params + [page_size, offset],
@@ -168,7 +175,8 @@ async def list_incidents(
 
     cols = [
         "id", "correlation_id", "cluster", "namespace", "alert_name", "hostname",
-        "status", "risk_tier", "llm_confidence", "llm_intent_json", "awx_job_id",
+        "status", "risk_tier", "llm_confidence", "llm_intent_json", "analysis_summary",
+        "escalate_to", "awx_job_id",
         "created_at", "updated_at", "resolved_at",
     ]
     items = [dict(zip(cols, r)) for r in rows]
@@ -252,7 +260,7 @@ async def approve_incident(
         # Launch AWX job with the ORIGINAL validated intent
         from agents.config import USE_MOCK_AWX
         if USE_MOCK_AWX:
-            from awx.mock_client import MockAWXClient
+            from simulation.mock_client import MockAWXClient
             awx = MockAWXClient()
         else:
             from awx.client import AWXClient
@@ -393,7 +401,7 @@ async def edit_and_approve_incident(
 
         from agents.config import USE_MOCK_AWX
         if USE_MOCK_AWX:
-            from awx.mock_client import MockAWXClient
+            from simulation.mock_client import MockAWXClient
             awx = MockAWXClient()
         else:
             from awx.client import AWXClient

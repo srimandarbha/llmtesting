@@ -145,8 +145,11 @@ class OpenShiftRunbookIngestionEngine:
                 namespace VARCHAR(100),      -- Operator/Namespace label
                 section_type VARCHAR(30),    -- 'meaning', 'diagnosis', 'mitigation'
                 raw_text TEXT,               
-                embedding vector(384)
+                embedding vector(384),
+                model_name VARCHAR(255) DEFAULT 'all-MiniLM-L6-v2',
+                model_version VARCHAR(50) DEFAULT '1.0'
             );
+
         """)
         # Ensure unique constraint exists for upsert capability
         cur.execute("""
@@ -164,8 +167,14 @@ class OpenShiftRunbookIngestionEngine:
             """)
             cur.execute("""
                 ALTER TABLE rhokp_knowledge 
-                ADD CONSTRAINT unique_alert_section_namespace UNIQUE (rhokp_id, section_type, namespace);
+                ADD CONSTRAINT unique_alert_section_namespace UNIQUE (rhokp_id, section_type, namespace, model_name, model_version);
             """)
+            
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rhokp_knowledge_model 
+            ON rhokp_knowledge(model_name, model_version);
+        """)
+
             
         cur.execute("""
             CREATE INDEX IF NOT EXISTS rhokp_knowledge_hnsw_idx 
@@ -220,11 +229,12 @@ class OpenShiftRunbookIngestionEngine:
                 
                 # Write row out into pgvector with UPSERT
                 cur.execute("""
-                    INSERT INTO rhokp_knowledge (rhokp_id, namespace, section_type, raw_text, embedding)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (rhokp_id, section_type, namespace)
+                    INSERT INTO rhokp_knowledge (rhokp_id, namespace, section_type, raw_text, embedding, model_name, model_version)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (rhokp_id, section_type, namespace, model_name, model_version)
                     DO UPDATE SET raw_text = EXCLUDED.raw_text, embedding = EXCLUDED.embedding;
-                """, (alert_name, operator_name, section_name, enriched_chunk_text, vector_coord))
+                """, (alert_name, operator_name, section_name, enriched_chunk_text, vector_coord, 'all-MiniLM-L6-v2', '1.0'))
+
 
         conn.commit()
         cur.close()
@@ -284,11 +294,12 @@ class OpenShiftRunbookIngestionEngine:
                     
                     # Write row out into pgvector with UPSERT
                     cur.execute("""
-                        INSERT INTO rhokp_knowledge (rhokp_id, namespace, section_type, raw_text, embedding)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (rhokp_id, section_type, namespace)
+                        INSERT INTO rhokp_knowledge (rhokp_id, namespace, section_type, raw_text, embedding, model_name, model_version)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (rhokp_id, section_type, namespace, model_name, model_version)
                         DO UPDATE SET raw_text = EXCLUDED.raw_text, embedding = EXCLUDED.embedding;
-                    """, (alert_name, operator_name, section_name, enriched_chunk_text, vector_coord))
+                    """, (alert_name, operator_name, section_name, enriched_chunk_text, vector_coord, 'all-MiniLM-L6-v2', '1.0'))
+
                 
                 # Commit periodically (e.g. every 10 files) or at the end
                 if idx % 10 == 0:
@@ -315,11 +326,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DATABASE_TARGET = {
-        "dbname": "rhokp",
-        "user": "postgres",
-        "password": "postgres",
-        "host": "localhost",
-        "port": "5432"
+        "dbname": os.environ.get("DB_NAME", "rhokp"),
+        "user": os.environ.get("DB_USER", "postgres"),
+        "password": os.environ.get("DB_PASSWORD", "postgres"),
+        "host": os.environ.get("DB_HOST", "localhost"),
+        "port": os.environ.get("DB_PORT", "5432")
     }
 
     engine = OpenShiftRunbookIngestionEngine(db_config=DATABASE_TARGET)

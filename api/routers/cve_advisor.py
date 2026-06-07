@@ -5,8 +5,7 @@ from sqlalchemy import text
 from typing import List, Dict
 import json
 from ..dependencies import db_session
-
-router = APIRouter(prefix="/api/clusters", tags=["CVE Advisor"])
+router = APIRouter(prefix="/clusters", tags=["CVE Advisor"])
 
 # Weights for severity to calculate risk score
 SEVERITY_WEIGHT = {
@@ -22,7 +21,7 @@ def calculate_risk_percent(cves: list) -> int:
     percent = min(100, int((score / MAX_RISK_BASELINE) * 100))
     return percent
 
-@router.get("/")
+@router.get("")
 async def list_clusters(db: AsyncSession = Depends(db_session)):
     result = await db.execute(text("SELECT cluster_id AS id, name, openshift_version AS current_version FROM clusters;"))
     clusters = result.fetchall()

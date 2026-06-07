@@ -17,13 +17,34 @@ from __future__ import annotations
 
 import json
 import uuid
+import re
 from dataclasses import dataclass
+
+def _extract_json_string(text: str) -> str:
+    """Extracts JSON object from a string using brace counting to handle nesting."""
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return text
+    
+    brace_count = 0
+    for i in range(start_idx, len(text)):
+        if text[i] == '{':
+            brace_count += 1
+        elif text[i] == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                return text[start_idx:i+1]
+                
+    return text
+
 from typing import Any, Literal
 
 from langchain.agents.agent import AgentExecutor
 from langchain.agents.react.agent import create_react_agent
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+import psycopg2
 
 from agents.config import LLM_API_URL, LLM_API_KEY, LLM_MODEL
 from agents.langchain_tools import (
@@ -36,21 +57,95 @@ from agents.langchain_tools import (
     query_prometheus,
 )
 from agents.risk_engine import RiskTier, classify_risk, get_risk_reasoning, is_action_allowed
+from agents.config import DATABASE_TARGET
+
+# ---------------------------------------------------------------------------
+# LLM Observability Callback Handler
+# ---------------------------------------------------------------------------
+
+class IncidentTimelineCallbackHandler(BaseCallbackHandler):
+    """Logs LLM intermediate steps (thoughts, tools, errors) to the database timeline."""
+    
+    def __init__(self, incident_id: uuid.UUID):
+        self.incident_id = str(incident_id)
+
+    def _log_to_db(self, action: str, notes: str = "", metadata: dict | None = None):
+        try:
+            conn = psycopg2.connect(**DATABASE_TARGET)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO incident_timeline (incident_id, actor_type, action, notes, metadata_json)
+                VALUES (%s, 'agent', %s, %s, %s)
+                """,
+                (self.incident_id, action, notes, json.dumps(metadata) if metadata else None)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception:
+            pass  # Best effort
+
+    def on_agent_action(self, action: Any, **kwargs: Any) -> None:
+        """Fires when the agent decides to use a tool, logging its internal thought process."""
+        if hasattr(action, "log") and action.log:
+            # ReAct format: "Thought: ...\nAction: ..."
+            thought = action.log.split("Action:")[0].strip()
+            if thought:
+                self._log_to_db("LLM Thought", notes=thought)
+
+    def on_tool_start(self, serialized: dict, input_str: str, **kwargs: Any) -> None:
+        tool_name = serialized.get("name", "unknown_tool")
+        if tool_name == "_Exception":
+            return
+        self._log_to_db(f"Executing Tool: {tool_name}", notes=f"Input: {input_str}")
+
+    def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
+        self._log_to_db("Tool Execution Failed", notes=str(error))
+
+    def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+        self._log_to_db("LLM Generation Error", notes=str(error))
+
 
 # ---------------------------------------------------------------------------
 # LLM client — points at the existing llama.cpp compatible endpoint
 # ---------------------------------------------------------------------------
 
 
-def _get_llm() -> ChatOpenAI:
+def _get_llm():
     """
     Returns a ChatOpenAI instance pointed at the local LLM endpoint.
     Compatible with llama.cpp server, Ollama, and OpenAI API.
     Set LLM_API_URL in .env to switch providers.
     """
+    from agents.config import USE_MOCK_LLM
+    if USE_MOCK_LLM:
+        from langchain_core.language_models.chat_models import BaseChatModel
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatResult, ChatGeneration
+        
+        class MockLLM(BaseChatModel):
+            def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+                return ChatResult(generations=[ChatGeneration(message=AIMessage(content='''Thought: I have gathered the context.
+Final Answer: {
+  "action": "delete_pvc",
+  "namespace": "machine-config-operator",
+  "target": "pvc-aul12345",
+  "reason": "Simulating a HIGH risk remediation action.",
+  "confidence": 0.95,
+  "analysis_summary": "Mock analysis summary for PVC deletion.",
+  "escalate_to": "Storage-Admin"
+}'''))])
+            
+            @property
+            def _llm_type(self) -> str:
+                return "mock"
+                
+        return MockLLM()
+
     return ChatOpenAI(
         base_url=LLM_API_URL.replace("/v1/chat/completions", "/v1"),
-        api_key=LLM_API_KEY,
+        api_key=LLM_API_KEY if LLM_API_KEY else "local",
         model=LLM_MODEL,
         temperature=0.1,
         max_retries=2,
@@ -190,6 +285,9 @@ def run_incident_pipeline(
     prompt = PromptTemplate.from_template(REACT_PROMPT_TEMPLATE)
 
     agent = create_react_agent(llm=llm, tools=ALL_TOOLS, prompt=prompt)
+    
+    timeline_cb = IncidentTimelineCallbackHandler(incident_id)
+    
     executor = AgentExecutor(
         agent=agent,
         tools=ALL_TOOLS,
@@ -197,6 +295,7 @@ def run_incident_pipeline(
         max_iterations=8,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
+        callbacks=[timeline_cb],
     )
 
     try:
@@ -240,11 +339,14 @@ def run_incident_pipeline(
     _notify("ANALYZING", "Validating intent schema and action allowlist")
 
     try:
-        intent = RemediationIntent.model_validate_json(raw_output)
+        clean_raw = _extract_json_string(raw_output)
+        intent = RemediationIntent.model_validate_json(clean_raw)
     except Exception:
         # Try direct classify_action call with the gathered context as fallback
-        fallback_raw = classify_action.invoke({"context_json": context_payload})
-        intent = RemediationIntent.model_validate_json(fallback_raw)
+        fallback_prompt = classify_action.invoke({"context_json": context_payload})
+        fallback_msg = llm.invoke(fallback_prompt)
+        clean_fallback = _extract_json_string(fallback_msg.content)
+        intent = RemediationIntent.model_validate_json(clean_fallback)
 
     # Allowlist validation
     if not is_action_allowed(intent.action) and intent.action != "escalate":

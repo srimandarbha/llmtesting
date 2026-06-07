@@ -4,13 +4,48 @@ import { createPortal } from 'react-dom'
 import { Dashboard } from './pages/Dashboard'
 import { IncidentDetail } from './pages/IncidentDetail'
 import { Analytics } from './pages/Analytics'
+import { Handovers } from './pages/Handovers'
+import { Summaries } from './pages/Summaries'
 import UpgradeAdvisor from './components/UpgradeAdvisor'
+import { FloatingTicker } from './components/FloatingTicker'
+import { AuthProvider, useAuth } from './hooks/useAuth'
 
 const NAV_ITEMS = [
   { to: '/',          label: 'Dashboard',  icon: '⚡', exact: true },
   { to: '/analytics', label: 'Analytics',  icon: '📊', exact: false },
   { to: '/upgrade-advisor', label: 'Advisor',  icon: '🛡️', exact: false },
+  { to: '/summaries', label: 'Summaries',  icon: '📝', exact: false },
+  { to: '/handovers', label: 'Handovers',  icon: '🤝', exact: false },
 ]
+
+function SidebarUserFooter() {
+  const { user, isAuthenticated } = useAuth()
+  return (
+    <div className="mt-auto pt-4 border-t border-white/5 space-y-3">
+      {isAuthenticated ? (
+        <div className="flex items-center gap-2 px-1">
+          <div className="w-7 h-7 rounded-full bg-brand-500/20 border border-brand-500/40 flex items-center justify-center text-brand-400 text-xs font-bold shrink-0">
+            {user.displayName[0]?.toUpperCase()}
+          </div>
+          <div className="overflow-hidden">
+            <p className="text-xs font-semibold text-slate-300 truncate">{user.displayName}</p>
+            <p className="text-[10px] text-slate-600 truncate">
+              {[user.shift, user.role].filter(Boolean).join(' · ')}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="px-1">
+          <p className="text-[10px] text-slate-600 text-center">No identity set</p>
+        </div>
+      )}
+      <div className="flex items-center justify-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        <p className="text-[10px] text-slate-600">SSO-Ready · LangChain v2 · FastAPI</p>
+      </div>
+    </div>
+  )
+}
 
 function Sidebar({ appName, appSubtext, appLogo }: { appName: string, appSubtext: string, appLogo: string | null }) {
   return (
@@ -51,9 +86,7 @@ function Sidebar({ appName, appSubtext, appLogo }: { appName: string, appSubtext
       </nav>
 
       {/* Footer */}
-      <div className="mt-auto pt-4 border-t border-white/5">
-        <p className="text-xs text-slate-600 text-center">LangChain v2 · FastAPI</p>
-      </div>
+      <SidebarUserFooter />
     </aside>
   )
 }
@@ -148,10 +181,12 @@ function Layout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen relative">
-      <Sidebar appName={appName} appSubtext={appSubtext} appLogo={appLogo} />
-      
-      {/* Sleek Action Bar */}
+    <div className="flex min-h-screen relative flex-col">
+      <FloatingTicker />
+      <div className="flex flex-1 overflow-hidden relative">
+        <Sidebar appName={appName} appSubtext={appSubtext} appLogo={appLogo} />
+        
+        {/* Sleek Action Bar */}
       <div className="absolute top-4 right-8 z-50 flex items-center gap-1.5 p-1 bg-surface-800/80 backdrop-blur-md border border-white/10 rounded-full shadow-lg">
         <button 
           onClick={() => setIsSettingsOpen(true)}
@@ -183,21 +218,26 @@ function Layout({ children }: { children: React.ReactNode }) {
           onClose={() => setIsSettingsOpen(false)}
         />
       )}
+      </div>
     </div>
   )
 }
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/incidents/:id" element={<IncidentDetail />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/upgrade-advisor" element={<UpgradeAdvisor />} />
-        </Routes>
-      </Layout>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/incidents/:id" element={<IncidentDetail />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/upgrade-advisor" element={<UpgradeAdvisor />} />
+            <Route path="/summaries" element={<Summaries />} />
+            <Route path="/handovers" element={<Handovers />} />
+          </Routes>
+        </Layout>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }
