@@ -36,6 +36,12 @@ DB_PASSWORD=your_secure_password
 CELERY_BROKER_URL=sqla+postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/${DB_NAME}
 CELERY_RESULT_BACKEND=db+postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/${DB_NAME}
 
+# Kafka Configuration (Optional, for kafka_consumer.py)
+KAFKA_BROKER_URL=localhost:9092
+KAFKA_TOPIC=sre_alerts
+KAFKA_DLQ_TOPIC=sre_alerts_dlq
+KAFKA_GROUP_ID=sre-agent-group
+
 # ... [add your LLM and other API keys] ...
 ```
 
