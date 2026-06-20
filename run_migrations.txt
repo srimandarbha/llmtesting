@@ -1,0 +1,6 @@
+# From the project root directory
+psql -U postgres -d agentdb -f db/migrations/001_new_tables.sql
+psql -U postgres -d agentdb -f db/migrations/002_constraints.sql
+psql -U postgres -d agentdb -f db/migrations/003_handovers.sql
+psql -U postgres -d agentdb -f db/migrations/004_summaries.sql
+psql -U postgres -d agentdb -f db/migrations/01_add_embedding_versioning.sql

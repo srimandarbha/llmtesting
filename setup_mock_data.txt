@@ -1,0 +1,38 @@
+# =====================================================================
+# Step 1: Run Core Database Migrations
+# =====================================================================
+# Initialize the schema for the core application (used by API and worker).
+# Run these sequential SQL migrations via psql.
+psql -U postgres -d rhokp -f db/migrations/001_new_tables.sql
+psql -U postgres -d rhokp -f db/migrations/002_constraints.sql
+psql -U postgres -d rhokp -f db/migrations/003_handovers.sql
+psql -U postgres -d rhokp -f db/migrations/004_summaries.sql
+psql -U postgres -d rhokp -f db/migrations/01_add_embedding_versioning.sql
+
+# =====================================================================
+# Step 2: Seed Base Simulation Data
+# =====================================================================
+# Automatically creates its own tables and fills them with a large batch 
+# of baseline mock data (clusters, incidents, alerts). Also generates 
+# foundational vector embeddings.
+python simulation/generate_simulated_snow_data.py
+
+# =====================================================================
+# Step 3: Ingest External Knowledge (RAG & CVEs)
+# =====================================================================
+# Sync OpenShift Runbooks (downloads repo and creates rhokp_knowledge)
+python ingestion/sync_runbook_to_rag.py
+
+# Sync CVE/Errata Knowledge (creates rhokp_cve_knowledge)
+python ingestion/sync_rhokp_cve_to_postgres.py
+
+# =====================================================================
+# Step 4: Start Live Streaming / Mock Services
+# =====================================================================
+# Live ServiceNow Delta Updates (Mock Mode). Run this to simulate ongoing 
+# updates to incidents to keep the data live.
+python ingestion/sync_servicenow_to_postgres.py --mock
+
+# Kafka Alert Consumer (Optional: uncomment if you have Kafka running).
+# export KAFKA_BROKER_URL="localhost:9092"
+# python ingestion/kafka_consumer.py
