@@ -1,0 +1,2872 @@
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephClusterNearFull.md -->
+<!-- ========================================== -->
+
+# CephClusterNearFull
+
+## Meaning
+
+Storage cluster utilization has crossed 75% and will become read-only at 85%.
+Free up some space or expand the storage cluster.
+
+## Impact
+
+Storage cluster will become read-only at 85%.
+
+## Diagnosis
+
+Using the Openshift console, go to Storage-Data Fountation-Storage systems.
+A list of the available storage systems with basic information about raw
+capacity and used capacity will be visible.
+The command "ceph health" provides also information about cluster storage
+capacity.
+
+## Mitigation
+
+Two options:
+
+- Scale storage: Depending on the type of cluster it will be needed to add
+storage devices and/or nodes. Review the Openshift Scaling storage
+documentation.
+
+- Delete information:
+If not is possible to scale up the cluster it will be needed to delete
+information in order to free space.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephClusterReadOnly.md -->
+<!-- ========================================== -->
+
+# CephClusterReadOnly
+
+## Meaning
+
+Storage cluster utilization has crossed 85% and will become read-only now.
+
+## Impact
+
+Storage cluster is read-only now and needs immediate data deletion or
+ cluster expansion.
+
+Storage cluster will become read-only at 85%.
+
+## Diagnosis
+
+Using the Openshift console, go to Storage-Data Fountation-Storage systems.
+A list of the available storage systems with basic information about raw
+capacity and used capacity will be visible.
+The command "ceph health" provides also information about cluster storage
+capacity.
+
+## Mitigation
+
+Free up some space or expand the storage cluster immediately.
+
+Two options:
+
+- Scale storage: Depending on the type of cluster it will be needed to add
+storage devices and/or nodes. Review the Openshift Scaling storage
+documentation.
+
+- Delete information:
+If not is possible to scale up the cluster it will be needed to delete
+information in order to free space.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephClusterWarningState.md -->
+<!-- ========================================== -->
+
+# CephClusterWarningState
+
+## Meaning
+
+Storage cluster is in warning state for more than 15m.
+
+The Storage cluster has been in a warning state for an unacceptable amount of
+time. While the storage operations will continue to function in this state, it
+is recommended to fix errors so that the cluster does not get into error state
+impacting operations. Check for other alerts that would have triggered prior
+to this one and troubleshoot those alerts first.
+
+## Impact
+
+Cluster services not available. Errors in operations retrieving/putting
+information in the cluster
+
+## Diagnosis
+
+See [general diagnosis document](helpers/diagnosis.md)
+
+## Mitigation
+
+### Check if it is a Network Issue
+
+Check if it is a [network issue](helpers/networkConnectivity.md)
+
+### Make changes to solve alert
+
+General troubleshooting will be required in order to determine the cause of this
+ alert. This alert will trigger along with other (usually many other) alerts.
+Please view and troubleshoot the other alerts first.
+
+### Review pods
+
+[pod debug](helpers/podDebug.md)
+
+If the basic health of the running pods, node affinity and resource availability
+on the nodes have been verified, run Ceph tools for status of the storage
+components.
+
+#### Troubleshoot Ceph
+
+[Troubleshoot_ceph_err](helpers/troubleshootCeph.md) and
+[gather_logs](helpers/gatherLogs.md) to provide more information to support
+teams.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephDataRecoveryTakingTooLong.md -->
+<!-- ========================================== -->
+
+# CephDataRecoveryTakingTooLong
+
+## Meaning
+
+Data recovery processes in Ceph are taking an extended amount of time,
+indicating potential issues with the recovery speed.
+
+## Impact
+
+**Severity:** Warning
+**Potential Customer Impact:** High
+
+This alert indicates that the ongoing data recovery in Ceph is progressing
+slower than expected, which may have a significant impact on system performance.
+
+## Diagnosis
+
+The alert is triggered when the data recovery process in Ceph is identified as
+taking too long. It is recommended to check the status of all OSDs to ensure
+they are up and running, as slow recovery may be related to OSD issues.
+
+**Prerequisites:** [Prerequisites](helpers/diagnosis.md)
+
+## Mitigation
+
+### Recommended Actions
+
+1. **Check for Network Issues:**
+   Verify if the extended data recovery time is due to network issues by
+   following the steps in the provided Standard Operating Procedure (SOP) -
+   [Check Ceph Network Connectivity SOP](helpers/networkConnectivity.md).
+
+2. **Generic Debugging:**
+   Follow the general pod debug workflow outlined below to identify and
+   address potential issues.
+
+   - [Pod Debug Workflow](helpers/podDebug.md)
+   - [Gather Logs](helpers/gatherLogs.md)
+
+3. **Investigate Disk Utilization:** Check for high disk utilization (near 100%)
+   during rebalancing or client I/O using tools like dstat. Assess if IOPS
+   limitations on disks contribute to slow recovery.
+
+4. **Object Count Impact:** Due to a higher object count (310 million),
+   replication efforts are extensive, impacting recovery time. Consider
+   adjusting parameters like "osd max push objects" to potentially accelerate
+   the process.
+
+**Additional Resources:**
+
+- [Troubleshooting](helpers/troubleshootCeph.md)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephFSOrphanedSnapshot.md -->
+<!-- ========================================== -->
+
+# CephFSOrphanedSnapshot
+
+## Meaning
+
+A snapshot is orphaned when there is no attached volume snapshot content available.
+This results in data that consumes storage space but remains
+inaccessible to the user. This alert is triggered when stale snapshots exist in
+a Ceph filesystem.
+
+## Impact
+
+Orphaned snapshots consume storage capacity without providing any value. Over
+time, accumulated orphaned snapshots can lead to unexpected storage exhaustion,
+potentially impacting the ability to provision new volumes or create new
+snapshots.
+
+## Diagnosis
+
+To identify orphaned snapshots in the filesystem, use the ODF CLI tool.
+
+### Install ODF CLI
+
+If not already installed, follow the installation instructions at:
+[Odf-Cli Installation](https://github.com/red-hat-storage/odf-cli?tab=readme-ov-file#installation)
+
+### List All Snapshots
+
+To view all snapshots and their binding status:
+
+```bash
+odf cephfs-snap ls
+```
+
+Snapshots with state `bound` have a corresponding Kubernetes
+VolumeSnapshotContent resource. Snapshots with state `orphaned` do not.
+
+### List Only Orphaned Snapshots
+
+To filter and display only the orphaned snapshots:
+
+```bash
+odf cephfs-snap ls --orphaned
+```
+
+### Running on a Client Cluster
+
+When running the ODF CLI on a client cluster, pass the `--storage-client` flag
+with the StorageClient CR name to provide the relevant client cluster details:
+
+```bash
+odf cephfs-snap ls --storage-client <storage-client-name>
+```
+
+```bash
+odf cephfs-snap ls --orphaned --storage-client <storage-client-name>
+```
+
+## Mitigation
+
+If the orphaned snapshots are no longer needed and not currently in use, you can
+safely delete them to reclaim storage space.
+
+### Delete an Orphaned Snapshot
+
+Use the `delete` subcommand with the subvolume name and snapshot name:
+
+```bash
+odf cephfs-snap delete <subvolume> <snapshot>
+```
+
+When running on a client cluster, include the `--storage-client` flag:
+
+```bash
+odf cephfs-snap delete <subvolume> <snapshot> --storage-client <storage-client-name>
+```
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephFSStaleSubvolume.md -->
+<!-- ========================================== -->
+
+# CephFSStaleSubvolume
+
+## Meaning
+
+A subvolume in a Ceph filesystem becomes stale when it loses connection to its
+associated PersistentVolume. This results in orphaned data that consumes
+storage space but remains inaccessible to the user. This alert is triggered when
+stale subvolumes exist in a Ceph filesystem.
+
+## Impact
+
+Stale subvolumes consume storage capacity that cannot be accessed or utilized
+by OpenShift. This leads to higher-than-expected storage usage and may prevent
+storage operations from completing successfully.
+
+## Diagnosis
+
+To identify stale subvolumes in the filesystem, you need to use the ODF CLI
+tool.
+
+### Install ODF CLI
+
+If not already installed, follow the installation instructions at:
+[Odf-Cli Installation](https://github.com/red-hat-storage/odf-cli?tab=readme-ov-file#installation)
+
+### List All Subvolumes
+
+To view all subvolumes, including those marked as stale:
+
+```bash
+odf subvolume ls
+```
+
+### List Only Stale Subvolumes
+
+To filter and display only the stale subvolumes:
+
+```bash
+odf subvolume ls --stale
+```
+
+## Mitigation
+
+If the stale subvolumes are no longer needed and not currently in use, you can
+safely delete them to reclaim storage space.
+
+To delete a stale subvolume:
+
+```bash
+odf subvolume delete <filesystem> <subvolume> <subvolumegroup>
+```
+
+The subvolume,subvolumegroup and filesystem details can be retrieved from the
+subvolume list command.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMdsCPUUsageHighNeedsHorizontalScaling.md -->
+<!-- ========================================== -->
+
+# MDSCpuUsageHighNeedsHorizontalScaling
+
+## Meaning
+
+Ceph MDS CPU usage for the MDS daemon has exceeded the threshold for adequate
+performance.
+
+## Impact
+
+MDS serves filesystem metadata. The MDS is crucial for any file creation,
+rename, deletion and update operations.
+MDS is by default is allocated 2 or 3 CPUS.
+It is okay as long as metadata operations are not too many.
+As metadata server get loaded due to high number of requests to the server,
+the metadata operation load increases and eventually triggers this alert.
+It means we need to scale horizontally by adding more metadata servers.
+This will help parallely serve the client requests much efficiently without
+overwhelming any single MDS pod.
+
+## Diagnosis
+
+To diagnose the alert, click on the workloads->pods and select the
+corresponding MDS pod and click on the metrics tab.
+You should be able to see the allocated and used CPU. By default,
+the alert is fired if the used CPU is 67% of allocated CPU and there
+is high rate of mds requests for past 6 hours.
+If this is the case take the steps mentioned in mitigation.
+
+## Mitigation
+
+In this case, we need to add more active metadata servers. The below
+command describes how to add multiple active MDS servers,
+
+```bash
+oc patch -n openshift-storage storagecluster ocs-storagecluster\
+    --type merge \
+    --patch '{"spec": {"managedResources": {"cephFilesystems":{"activeMetadataServers": 2}}}}'
+```
+PS: Make sure we have enough CPU provisioned for MDS depending on the load.
+
+Always increase the `activeMetadataServers` by 1 and analyze the load.
+The scaling of activeMetadataServers work only if you have more than one PV.
+If there is only one PV that is causing CPU load, look at increasing the
+CPU resource as described in
+[VerticalScaling](CephMdsCPUUsageHighNeedsVerticalScaling.md) file
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMdsCPUUsageHighNeedsVerticalScaling.md -->
+<!-- ========================================== -->
+
+# MDSCpuUsageHighNeedsVerticalScaling
+
+## Meaning
+
+Ceph MDS CPU usage for the MDS daemon has exceeded the threshold for adequate
+performance.
+
+## Impact
+
+MDS serves filesystem metadata. The MDS is crucial for any file creation,
+rename, deletion and update operations.
+MDS is by default is allocated 2 or 3 CPUS.
+It is okay as long as metadata operations are not too many.
+When the metadata operation load increases enough to trigger this alert,
+it means the default CPU allocation is unable to cope with load.
+We need to do a vertical scaling by increasing the number of CPU allocation
+on the same pod.
+
+## Diagnosis
+
+To diagnose the alert, click on the workloads->pods and select the
+corresponding MDS pod and click on the metrics tab.
+You should be able to see the allocated and used CPU. By default,
+the alert is fired if the used CPU is 67% of allocated CPU for 6 hours.
+If this is the case take the steps mentioned in mitigation.
+
+## Mitigation
+
+We need to increase the number of CPUs allocated. The below command
+describes how to set the number of allocated CPU for MDS server.
+
+```bash
+oc patch -n openshift-storage storagecluster ocs-storagecluster \
+    --type merge \
+    --patch '{"spec": {"resources": {"mds": {"limits": {"cpu": "8"},
+    "requests": {"cpu": "8"}}}}}'
+```
+Above is a sample patch command, user need to see their current CPU
+configurations and increase accordingly
+PS: It is always adviced to add another MDS pod (that is to scale
+Horizontally) once we have reached the max resource limit. Please see
+[HorizontalScaling](CephMdsCPUUsageHighNeedsHorizontalScaling.md)
+documentation for more details.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMdsCacheUsageHigh.md -->
+<!-- ========================================== -->
+
+# MDSCacheUsageHigh
+
+## Meaning
+
+Ceph MDS cache usage for the MDS daemon has exceeded above 95% of the `mds_cache_memory_limit`.
+
+## Impact
+
+If the MDS cannot keep its cache usage under the target threshold, that is,
+`mds_health_cache_threshold` (150%) of the cache limit, that is,
+`mds_cache_memory_limit`, the MDS will send a health alert to the Monitors
+indicating the cache is too large.
+
+As a result the MDS related operations, like, caps revocation, will become slow.
+
+## Diagnosis
+
+Check the usage of `ceph_mds_mem_rss` metric and ensure that it is under 95% of
+the cache limit set in `mds_cache_memory_limit`.
+
+The MDS tries to stay under a reservation of the `mds_cache_memory_limit` by
+trimming unused metadata in its cache and recalling cached items in the client
+caches. It is possible for the MDS to exceed this limit due to slow recall from
+clients as result of multiple clients accesing the files.
+
+Read more about ceph MDS cache configuration [here](https://docs.ceph.com/en/latest/cephfs/cache-configuration/?highlight=mds%20cache%20configuration#mds-cache-configuration)
+
+## Mitigation
+
+Make sure we have enough memory provisioned for MDS cache.
+
+Memory resources for the MDS pods should be updated in the ocs-storageCluster in
+order to increase the `mds_cache_memory_limit`. For example, run the following command
+to set the memory of MDS pods to 8GB
+
+```bash
+oc patch -n openshift-storage storagecluster ocs-storagecluster \
+    --type merge \
+    --patch '{"spec": {"resources": {"mds": {"limits": {"memory": "8Gi"},"requests": {"memory": "8Gi"}}}}}' 
+```
+
+**Note**: ODF sets `mds_cache_memory_limit` to half of the MDS pod memory request/limit.
+So if the memory is set to 8GB using above command, then the operator will set the
+mds cache memory limit to 4GB
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMdsCpuUsageHigh.md -->
+<!-- ========================================== -->
+
+# MDSCpuUsageHigh
+
+## Meaning
+
+Ceph MDS cpu usage for the MDS daemon has exceeded the threshold for adequate
+performance.
+
+## Impact
+
+MDS serves filesystem metadata. The MDS is crucial for any file creation,
+rename, deletion and update operations.
+MDS is by default is allocated 2 or 3 CPUS.
+It is okay as long as metadata operations are not too many.
+When the metadata operation load increases enough to trigger this alert,
+it means the default CPU allocation is unable to cope with load and we need to
+increase the CPU allocation or run multiple active metadata servers.
+
+## Diagnosis
+
+To diagnose the alert, click on the workloads->pods and select the
+corresponding MDS pod and click on the metrics tab.
+You should be able to see the allocated and used CPU. By default,
+the alert is fired if the used CPU is 67% of allocated CPU for 6 hours.
+If this is the case take the steps mentioned in mitigation.
+
+## Mitigation
+
+We need to either increase the allocated CPU or run multiple active MDS. The
+below command describes how to set the number of allocated CPU for MDS server.
+
+```bash
+oc patch -n openshift-storage storagecluster ocs-storagecluster \
+    --type merge \
+    --patch '{"spec": {"resources": {"mds": {"limits": {"cpu": "8"},
+    "requests": {"cpu": "8"}}}}}'
+```
+
+In order to run multiple active MDS servers, use below command
+
+```bash
+oc patch -n openshift-storage storagecluster ocs-storagecluster\
+    --type merge \
+    --patch '{"spec": {"managedResources": {"cephFilesystems":{"activeMetadataServers": 2}}}}'
+
+Make sure we have enough CPU provisioned for MDS depending on the load.
+```
+
+Always increase the `activeMetadataServers` by 1.
+The scaling of activeMetadataServers works only if you have more than one PV.
+If there is only one PV that is causing CPU load,
+look at increasing the cpu resource as described above.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMdsMissingReplicas.md -->
+<!-- ========================================== -->
+
+# CephMdsMissingReplicas
+
+## Meaning
+
+Minimum required replicas for the storage metadata service (MDS) are not available.
+This might affect the working of storage cluster.
+
+## Impact
+
+MDS is responsible for file metadata. Degradation of the MDS service can affect
+the working of the storage cluster (related to cephfs storage class) and should
+be fixed as soon as possible.
+
+## Diagnosis
+
+Make sure we have enough RAM provisioned for MDS Cache. Default is 4GB, but
+recomended is minimum 8GB.
+
+## Mitigation
+
+It is highly recomended to distribute MDS daemons across at least two nodes in
+the cluster. Otherwise, a hardware failure on a single node may result in the
+file system becoming unavailable.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMgrIsAbsent.md -->
+<!-- ========================================== -->
+
+# CephMgrIsAbsent
+
+## Meaning
+
+Ceph Manager cannot be found or accessed from Prometheus target discovery.
+
+## Impact
+
+Storage metrics collector won't be available and users won't be able to see
+the storage metrics anymore. Not having a Ceph manager running impacts the
+monitoring of the cluster, PVC creation and deletion requests and should be
+resolved as soon as possible. Impact is critical here.
+
+## Diagnosis
+
+### Check if it is a network issue
+Check the [network connectivity](helpers/networkConnectivity.md).
+We cannot do much about the possible causes of network issues
+e.g. misconfigured AWS security group.
+Therefore, if it is a network issue, escalate to the ODF team by following
+the steps [here](helpers/sre-to-engineering-escalation.md#procedure).
+
+## Mitigation
+
+Verify the rook-ceph-mgr pod is failing and restart if necessary.
+If the ceph mgr pod restart fails, use general basic pod troubleshooting to resolve.
+
+Verify the ceph mgr pod is failing:
+
+    oc get pods -n openshift-storage | grep mgr
+
+Describe the ceph mgr pod for more detail:
+
+    oc describe -n openshift-storage pods/<rook-ceph-mgr pod name from previous step>
+
+Analyze errors (i.e. resource issues?)
+
+Try deleting the pod and watch for a successful restart:
+
+    oc get pods -n openshift-storage | grep mgr
+
+If above fails, follow general pod troubleshooting procedures.
+
+[pod debug](helpers/podDebug.md) [gather_logs](helpers/gatherLogs.md)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMgrIsMissingReplicas.md -->
+<!-- ========================================== -->
+
+# CephMgrIsMissingReplicas
+
+## Meaning
+
+Ceph Manager is missing replicas. That means Storage metrics collector
+service doesn't have required no of replicas.
+
+## Impact
+
+This impacts the health status reporting and will cause some of the information
+reported by `ceph status` to be missing or stale. In addition, the ceph manager
+is responsible for a Manager framework aimed at expanding the Ceph existing capabilities.
+
+## Diagnosis
+
+To resolve this alert, you will need to determine the cause of the disappearance
+of the Ceph Manager through the logs and restart if necessary.
+
+## Mitigation
+
+Check the manager pod's logs. Verify the rook-ceph-mgr pod is failing and restart
+if necessary. If the ceph mgr pod restart fails, use general basic pod troubleshooting
+to resolve.
+
+[pod debug](helpers/podDebug.md) [gather_logs](helpers/gatherLogs.md)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMonHighNumberOfLeaderChanges.md -->
+<!-- ========================================== -->
+
+# CephMonHighNumberOfLeaderChanges
+
+## Meaning
+
+In a Ceph cluster there is a redundant set of monitors that store critical
+information about the storage cluster. Monitors synchronize periodically to
+obtain information about the storage cluster. The first monitor to get the
+most updated information become leader and other monitors will start their
+synchronization process asking the leader.
+
+This alert indicates a high frequent Ceph Monitor leader change per minute.
+
+## Impact
+
+An unusual change of leader is usually produced by problems in network
+connection, or another kind of problem in one or more monitor pods.
+This situation can affect negatively to the storage cluster performance.
+
+## Diagnosis
+
+The alert should indicate the monitor pod with the problem:
+
+    Ceph Monitor <rook-ceph-mon-X... pod> on host <hostX> has seen <X> leader
+    changes per minute recently.
+
+Check the affected monitor's logs. More information on the cause can be seen
+from these logs.
+
+## Mitigation
+
+[pod debug](helpers/podDebug.md) [gather_logs](helpers/gatherLogs.md)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMonLowNumber.md -->
+<!-- ========================================== -->
+
+# CephMonLowNumber
+
+## Meaning
+
+The number of ceph monitors in the cluster can be adjusted to improve cluster
+resiliency.
+Typically the number of failure zones in the cluster is 5 or more, and there
+are only 3 monitors.
+
+## Impact
+
+This a "info" level alert, and therefore just a suggestion.
+The alert is just suggesting to increase the number of ceph monitors, to be
+more resistent to failures.
+It can be silenced without any impact in the cluster functionality or
+performance.
+If the number of monitors is increased to 5, the cluster will be more robust.
+
+## Diagnosis
+
+Check the number of Ceph Monitors:
+
+```bash
+    oc get pods -l app=rook-ceph-mon --no-headers=true -n openshift-storage | wc -l
+```
+
+Check the number of failure zones available:
+
+```bash
+    oc get storagecluster -o jsonpath='{.items[*].status.failureDomainValues}' -n openshift-storage | tr ',' '\n' | sort -u | wc -l
+```
+
+It the number of available failure zones is greater or equal to 5, and there
+are only 3 monitors, the alert will be raised.
+
+## Mitigation
+
+If increasing the number of monitors to 5 is not a right option (for any cause),
+the alert can be silenced.
+
+If to increase the number of monitors is an acceptable proposal, then execute
+the following command to do that:
+
+```bash
+    oc patch storageclusters.ocs.openshift.io ocs-storagecluster -n openshift-storage --type merge --patch '{"spec": {"managedResources": {"cephCluster": {"monCount" : 5}}}}'
+```
+
+After scaling the deployment, monitor the creation and readiness of new monitor
+ pods using:
+
+```bash
+    oc get pods -n openshift-storage -l app=rook-ceph-mon
+```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMonQuorumAtRisk.md -->
+<!-- ========================================== -->
+
+# CephMonQuorumAtRisk
+
+## Meaning
+
+Storage cluster quorum is low.
+Multiple mons work together to provide redundancy by each keeping a copy
+of the metadata. Cluster is deployed with 3 or 5 mons, and require 2 or more mons
+to be up and running for quorum and for the storage operations to run.
+
+## Impact
+
+If quorum is lost, access to data is at risk.
+
+## Diagnosis
+
+Run following command for each Monitor in the cluster.
+`ceph tell mon.ID mon_status`
+
+For more on this command’s output, see [Understanding mon_status](https://docs.ceph.com/en/latest/rados/troubleshooting/troubleshooting-mon/#rados-troubleshoting-troubleshooting-mon-understanding-mon-status).
+
+## Mitigation
+
+[Restore Ceph Mon Quorum Lost](https://access.redhat.com/solutions/5898541)
+[Troubleshooting Monitor](https://docs.ceph.com/en/latest/rados/troubleshooting/troubleshooting-mon/)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMonQuorumLost.md -->
+<!-- ========================================== -->
+
+# CephMonQuorumLost
+
+## Meaning
+
+The number of monitors in the storage cluster are not enough.
+Multiple mons work together to provide redundancy by each keeping a copy
+of the metadata. Cluster is deployed with 3 or 5 mons, and require 2 or more mons
+to be up and running for quorum and for the storage operations to run.
+
+This alert indicates that there is only 1 monitor pod running or even none.
+
+## Impact
+
+If quorum is lost and it is beyond recovery now. Any data lose is permanent
+at this point.
+
+## Diagnosis
+
+Set logging to files true,
+`# ceph config set global log_to_file true`
+`# ceph config set global mon_cluster_log_to_file true`
+Then check the corresponding Ceph Monitor logs in /var/log/ceph/<cluster-id> location
+
+## Mitigation
+
+[Restore Ceph Mon Quorum Lost](https://access.redhat.com/solutions/5898541)
+[Troubleshooting Monitor](https://docs.ceph.com/en/latest/rados/troubleshooting/troubleshooting-mon/)
+
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephMonVersionMismatch.md -->
+<!-- ========================================== -->
+
+# CephMonVersionMismatch
+
+## Meaning
+
+There are different versions of Ceph Mon components running.. Typically this
+alert is triggered during an upgrade that is taking a long time.
+
+## Impact
+
+It will impact cluster availability if the number of monitors are not enough
+ to get quorum. Cluster operations will be blocked until quorum will be
+ established again
+
+## Diagnosis
+
+Verify Ceph version in Mon Pods:
+
+```console
+    oc describe pods -n openshift-storage --selector app=rook-ceph-mon | grep CONTAINER_IMAGE
+```
+
+All the pods must have the same image
+
+## Mitigation
+
+Usually the problem is solved (all Monitor daemons running same Ceph version)
+when the upgrade has finished.
+
+If the alert persists after upgrade:
+
+Verify the connectivity between monitors is working properly, verifying
+[network connectivity](helpers/networkConnectivity.md)
+
+Verify the ODF operator events and logs in order to find an error and an
+explanation about the problem updating the OSD daemon with different version.
+
+```bash
+    ocs_operator=$(oc describe deployment -n openshift-storage ocs-operator | grep OPERATOR_CONDITION_NAME: | awk '{ print $2 }')
+    oc get events --field-selector involvedObject.name=$ocs_operator --namespace openshift-storage
+```
+
+```bash
+    oc logs -n openshift-storage --selector name=ocs-operator -c ocs-operator
+```
+
+If nothing found, verify the
+[ODF operator state](helpers/checkOperator.md)
+
+If the ODF operator does not present any problem,
+see [general diagnosis document](helpers/diagnosis.md)
+
+If no issues found, [gather_logs](helpers/gatherLogs.md) to provide more
+information to support teams.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephNodeDown.md -->
+<!-- ========================================== -->
+
+# CephNodeDown
+
+## Meaning
+
+This alert indicates that one of the Ceph storage node went down.
+
+## Impact
+
+A node running Ceph pods is down. While storage operations will continue to
+function as Ceph is designed to deal with a node failure, it is recommended
+to resolve the issue to minimise risk of another node going down and affecting
+storage functions.
+
+## Diagnosis
+
+The alert message will clearly indicate which node is down
+
+    Storage node <nod-name> went down. Please check the node immediately.
+
+## Mitigation
+
+Document the current OCS pods (running and failing):
+
+    oc -n openshift-storage get pods
+
+The OCS resource requirements must be met in order for the osd pods to be
+scheduled on the new node. This may take a few minutes as the ceph cluster
+recovers data for the failing but now recovering osd.
+
+To watch this recovery in action ensure the osd pods were actually placed on the
+new worker node.
+
+Check if the previous failing osd pods are now running:
+
+    oc -n openshift-storage get pods
+
+If the previously failing osd pods have not been scheduled, use describe and
+check events for reasons the pods were not rescheduled.
+
+Describe events for failing osd pod:
+
+    oc -n openshift-storage get pods | grep osd
+
+Find a failing osd pod(s):
+
+    oc -n openshift-storage describe pods/<osd podname from previous step>
+
+In the event section look for failure reasons, such as resources not being met.
+
+In addition, you may use the rook-ceph-toolbox to watch the recovery. This step
+is optional but can be helpful for large Ceph clusters.
+
+**Determine failed OCS Node** [determine_failed_ocs_node](helpers/determineFailedOcsNode.md)
+
+[access toolbox](helpers/accessToolbox.md)
+
+From the rsh command prompt, run the following and watch for "recovery" under
+the io section:
+
+    ceph status
+
+[gather logs](helpers/gatherLogs.md)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDCriticallyFull.md -->
+<!-- ========================================== -->
+
+# CephOSDCriticallyFull
+
+## Meaning
+
+Utilization of back-end storage device (OSD) has crossed 80%.
+Immediately free up some space or expand the storage cluster or contact support.
+
+## Impact
+
+One of the OSD Storage size has crossed 80% of the total capacity. Expand the
+cluster immediately.
+
+## Diagnosis
+
+Alert message will have enough information about the underlying failure.
+It should show the name of 'ceph-daemon', 'device-class' and the 'host-name'.
+
+A sample alert message is provided below,
+
+    Utilization of storage device <ceph-daemon-name> of device_class type
+<device-class-name> has crossed 80% on host <host-name>. Immediately free up
+some space or add capacity of type <device-class>.
+
+## Mitigation
+
+### Delete data
+
+The customer may delete data and the cluster will resolve the alert through self
+healing processes.
+
+### Expand the storage capacity
+
+Customer may assess their ability to expand. Here are some points,
+
+**Current Storage Size < 1TB**:  
+The customer may increase capacity via the addon and the cluster will resolve
+the alert through self healing processes.
+
+**Current Size itself is 1TB**:
+Please contact your dedicated customer care support.
+
+[gather_logs](helpers/gatherLogs.md)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDDiskNotResponding.md -->
+<!-- ========================================== -->
+
+# CephOSDDiskNotResponding
+
+## Meaning
+
+A disk device on one of the hosts is not responding, potentially impacting the
+performance and availability of the OSD.
+
+## Impact
+
+**Severity:** Error
+**Potential Customer Impact:** Medium
+
+This alert signals that a disk device is not responding on a host, and it may
+affect the proper functioning of the associated OSD (Object Storage Daemon).
+
+## Diagnosis
+
+The alert is raised when a disk device is identified as not responding. To
+diagnose the issue, check whether all OSDs are up and running.
+
+**Prerequisites:** [Prerequisites](helpers/diagnosis.md)
+
+## Mitigation
+
+### Recommended Actions
+
+1. **Check for Network Issues:** Verify if the unresponsive disk issue is
+   related to a network problem by following the steps in the provided Standard
+   Operating Procedure (SOP) -
+   [Check Ceph Network Connectivity SOP](helpers/networkConnectivity.md).
+   Escalate to the ODF team if it is a network issue.
+
+2. **Generic Debugging:** Follow the general pod debug workflow outlined below
+   to identify and address potential issues.
+   - [Pod Debug Workflow](helpers/podDebug.md)
+   - [Gather Logs](helpers/gatherLogs.md)
+
+**Additional Resources:**
+
+- [Troubleshooting](helpers/troubleshootCeph.md)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDDiskUnavailable.md -->
+<!-- ========================================== -->
+
+# CephOSDDiskUnavailable
+
+## Meaning
+
+A disk device on one of the hosts is inaccessible, leading to the corresponding
+OSD being marked out by the Ceph cluster.
+
+## Impact
+
+**Severity:** Error
+**Potential Customer Impact:** High
+
+This alert indicates that a disk device is not accessible on one of the hosts,
+resulting in the Ceph cluster marking the corresponding OSD as out. The alert is
+triggered when a Ceph node fails to recover within 10 minutes.
+
+## Diagnosis
+
+The alert is raised when a disk device becomes inaccessible on a host, causing
+the associated OSD to be marked out by the Ceph cluster. To determine which node
+has failures, follow the procedure outlined in
+[Determine Failed OCS Node](helpers/determineFailedOcsNode.md).
+
+**Prerequisites:** [Prerequisites](helpers/diagnosis.md)
+
+## Mitigation
+
+### Recommended Actions
+
+1. **Determine Failed OCS Node:** Follow the procedure in
+   [Determine Failed OCS Node](helpers/determineFailedOcsNode.md) to identify
+   the node with failures.
+
+2. **Gather Logs:** Collect logs using the [Gather Logs](helpers/gatherLogs.md)
+   procedure for further analysis.
+
+3. **Check for Network Issues:** Verify if the issue is related to a network
+   problem by following the steps in the provided Standard Operating Procedure
+   (SOP) -
+   [Check Ceph Network Connectivity SOP](helpers/networkConnectivity.md).
+   Escalate to the ODF team if it is a network issue.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDDown.md -->
+<!-- ========================================== -->
+
+# CephOSDDown
+
+## Meaning
+
+CephOSDDown indicates that one or more ceph-osd daemons are not running as expected.
+
+## Impact
+
+Ceph detects that the OSDs are down and automatically starts the recovery
+process by moving the data to other available OSDs. But if the OSDs having
+the copies of the data also fail during this recovery, then there is a
+chance of permanent data loss.
+
+## Diagnosis
+
+The alert is triggered when Ceph OSD(s) is/are down,
+please check the ceph-osd daemons and take corrective measures.
+
+## Mitigation
+
+### Recommended Actions
+
+1. In an LSO cluster, if the disk failed, the OSD may need to be replaced.
+Please ref:
+[Instructions for safely replacing operational or failed devices]:
+  https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.17/html-single/replacing_devices/index
+
+2. Investigate why one or more OSDs are marked down. The ceph-osd daemon(s)
+or their host(s) may have crashed or been stopped, or peer OSDs might be
+unable to reach the OSD over the public or private network. Common causes
+include a stopped or crashed daemon, a “down” host, or a network failure.
+
+Verify that the host is healthy, if not switch to the node/host where the
+failed OSDs are running and check the logs at
+(/var/lib/rook/openshift-storage/*) may contain troubleshooting information.
+
+Unable to resolve the failed OSDs, please connect with Red Hat Support.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDFlapping.md -->
+<!-- ========================================== -->
+
+# CephOSDFlapping
+
+## Meaning
+
+Ceph storage OSD is flapping, indicating that a daemon has restarted 10 times \
+in the last 5 minutes.
+
+## Impact
+
+This may affect Ceph storage stability and reliability.
+
+## Diagnosis
+
+Check pod events or Ceph status to identify the cause of OSD flapping.
+
+## Mitigating
+
+### Recommended Network Configuration
+
+The upstream Ceph community traditionally suggests having separate public
+(front-end) and private (cluster/back-end/replication) networks, offering the
+following benefits:
+
+1. **Segregation of Traffic:**
+   - Heartbeat traffic and replication/recovery traffic (private) are separated
+     from traffic between clients and OSDs/monitors (public).
+   - Prevents one stream of traffic from DoS-ing the other, avoiding cascading failures.
+
+2. **Additional Throughput:**
+   - Enhances throughput for both public and private traffic
+
+### Halting Flapping
+
+If OSDs repeatedly flap (marked down and then up again), force monitors to halt
+the flapping by temporarily freezing their states:
+
+```bash
+ceph osd set noup      # prevent OSDs from getting marked up
+ceph osd set nodown    # prevent OSDs from getting marked down
+```
+
+These flags are recorded in the osdmap:
+
+```bash
+ceph osd dump | grep flags
+```
+
+Two other flags, noin and noout, prevent booting OSDs from being marked in or
+out, respectively. Clear these flags with:
+
+```bash
+ceph osd unset noup
+ceph osd unset nodown
+```
+
+Two additional flags, noin and noout, prevent booting OSDs from being marked in
+or protect OSDs from eventually being marked out, regardless of the current
+value of mon_osd_down_out_interval.
+
+> Note: noup, noout, and nodown are temporary; after clearing the flags, the
+> blocked action becomes possible shortly thereafter. However, the noin flag
+> prevents OSDs from being marked in on boot, and daemons that started while the
+> flag was set will remain that way.
+---
+> Note: Causes and effects of flapping can be mitigated to some extent by making
+> careful adjustments to mon_osd_down_out_subtree_limit,
+> mon_osd_reporter_subtree_level, and mon_osd_min_down_reporters. The optimal
+> settings depend on cluster size, topology, and the Ceph release in use. The
+> interaction of all these factors is subtle and beyond the scope of this
+> document.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDNearFull.md -->
+<!-- ========================================== -->
+
+# CephOSDNearFull
+
+## Meaning
+
+Utilization of the back-end storage device OSD has crossed 75% on host
+`<hostname>`. Free up some space or expand the storage cluster or contact
+support.
+
+## Impact
+
+- **Severity:** Warning
+- **Potential Customer Impact:** High
+
+The OSD storage devices nearing full capacity can impact the overall performance
+and availability of the Ceph storage system.
+
+## Diagnosis
+
+The alert is triggered when the utilization of the back-end storage device OSD
+exceeds 75%. Detailed diagnosis involves checking whether all OSDs are up and
+running.
+
+### Prerequisites
+
+1. Verify cluster access:
+   - Check the output to ensure you are in the correct context for the cluster
+     mentioned in the alert.
+   - List clusters you have permission to access:
+
+     ```bash
+     ocm list clusters
+     ```
+
+   - From the list, find the cluster ID of the mentioned cluster.
+
+2. Check Alerts:
+   - Get the route to this cluster’s alert manager:
+
+     ```bash
+     MYALERTMANAGER=$(oc -n openshift-monitoring get routes/alertmanager-main
+     --no-headers | awk '{print $2}')
+     ```
+
+   - Check all alerts:
+
+     ```bash
+     curl -k -H "Authorization: Bearer $(oc -n openshift-monitoring sa get-token
+     prometheus-k8s)" https://${MYALERTMANAGER}/api/v1/alerts | jq '.data[] |
+     select( .labels.alertname) | { ALERT: .labels.alertname, STATE:
+     .status.state}'
+     ```
+
+3. (Optional) Document OCS Ceph Cluster Health:
+   - You may check OCS Ceph Cluster health using the rook-ceph toolbox:
+     - Check and document ceph cluster health:
+
+       ```bash
+       TOOLS_POD=$(oc get pods -n openshift-storage -l app=rook-ceph-tools -o name)
+       oc rsh -n openshift-storage $TOOLS_POD
+       ceph status
+       ceph osd status
+       exit
+       ```
+
+## Mitigation
+
+### 1. Delete Data
+
+The following instructions only apply
+to OCS clusters that are near or full but NOT in readonly mode. Readonly mode
+would prevent any changes including deleting data (i.e. PVC/PV deletions).
+
+Delete some data, and the cluster will resolve the alert through
+self-healing processes.
+
+### 2. Current size < 1 TB, Expand to 4 TB
+
+The user may increase capacity via the addon, and the cluster will resolve
+the alert through self-healing processes.
+
+### 3. Current size = 4TB
+
+Please contact Dedicated Support.
+
+Document Ceph Cluster health check:
+[gather_logs](helpers/gatherLogs.md)
+
+```bash
+oc adm must-gather --image=<must-gather-image-name>
+```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDSlowOps.md -->
+<!-- ========================================== -->
+
+# CephOSDSlowOps
+
+## Meaning
+
+OSD (Object Storage Daemon) requests are taking an extended amount of time to
+process, indicating potential performance issues.
+
+## Impact
+
+**Severity:** Warning
+**Potential Customer Impact:** Medium
+
+This alert suggests that OSDs are experiencing delays in processing requests,
+potentially affecting the overall performance of the Ceph storage system.
+
+## Diagnosis
+
+The alert is triggered when OSD requests take longer to process than the time
+defined by the `osd_op_complaint_time` parameter, which is set to 30 seconds by
+default. To gather more information about the slow requests, access the OSD pod
+terminal and issue the following commands:
+
+```bash
+ceph daemon osd.<id> ops
+ceph daemon osd.<id> dump_historic_ops
+```
+
+Note: Replace `<id>` with the OSD number, which can be found in the pod name
+(e.g., `rook-ceph-osd-0-5d86d4d8d4-zlqkx`, where `<0>` is the OSD ID).*
+
+## Mitigation
+
+### Recommended Actions
+
+1. **Check Hardware/Infrastructure:** Investigate problems with the underlying
+   hardware/infrastructure, such as disk drives, hosts, racks, or network
+   switches. Use the Openshift monitoring console to find alerts/errors about
+   cluster resources.
+
+2. **Check Network Issues:** Verify if the slow OSD operations are related to
+   network problems. Follow the steps in the provided Standard Operating
+   Procedure (SOP) -
+   [Check Ceph Network Connectivity SOP](helpers/networkConnectivity.md).
+   Escalate to the ODF team if it is a network issue.
+
+3. **Review System Load:** Use the Openshift console to review metrics of the
+   OSD pod and the Node running the OSD. If needed, add/assign more resources to
+   address system load issues.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephOSDVersionMismatch.md -->
+<!-- ========================================== -->
+
+# CephOSDVersionMismatch
+
+## Meaning
+
+There are different versions of Ceph OSD components running. Typically this
+alert triggers during an upgrade that is taking a long time.
+
+## Impact
+
+It will impact cluster performance.
+
+## Diagnosis
+
+Verify Ceph version in OSD Pods:
+
+```bash
+    oc describe pods -n openshift-storage --selector app=rook-ceph-osd | grep CONTAINER_IMAGE
+```
+
+All the pods must have the same image
+
+## Mitigation
+
+Usually the problem is solved (all OSDs daemons running same Ceph version) when
+ the upgrade has finished.
+
+If the alert persists after upgrade:
+
+Verify the ODF operator events and logs in order to find an error and an
+explanation about the problem updating the OSD daemon with different version.
+
+```bash
+    ocs_operator=$(oc describe deployment -n openshift-storage ocs-operator | grep OPERATOR_CONDITION_NAME: | awk '{ print $2 }')
+    oc get events --field-selector involvedObject.name=$ocs_operator --namespace openshift-storage
+```
+
+```bash
+    oc logs -n openshift-storage --selector name=ocs-operator -c ocs-operator
+```
+
+If nothing found, verify the
+[ODF operator state](helpers/checkOperator.md)
+
+If the ODF operator does not present any problem,
+see [general diagnosis document](helpers/diagnosis.md)
+
+If no issues found, [gather_logs](helpers/gatherLogs.md) to provide more
+information to support teams.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephPgRepairTakingTooLong.md -->
+<!-- ========================================== -->
+
+# CephPGRepairTakingTooLong
+
+## Meaning
+
+Self-healing operations within the Ceph storage system are taking an extended
+amount of time, indicating potential issues with the repair process.
+
+## Impact
+
+**Severity:** Warning
+**Potential Customer Impact:** High
+
+This alert signals that self-healing operations in Ceph, specifically related to
+placement groups, are taking longer than expected.
+
+## Diagnosis
+
+The alert is triggered when self-healing processes within Ceph are identified as
+taking too long. The suggested approach is to check for inconsistent placement
+groups and perform repairs using the provided Knowledgebase Article (KCS) -
+[KCS with PGRepair details](https://access.redhat.com/solutions/1589113).
+
+## Mitigation
+
+### Recommended Actions
+
+1. **Repair Placement Groups:** Execute the steps outlined in the KCS with
+   PGRepair details to identify and repair inconsistent placement groups.
+
+   [KCS with PGRepair details](https://access.redhat.com/solutions/1589113)
+
+**Additional Resources:**
+
+- [Gather Logs](helpers/gatherLogs.md)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephPoolQuotaBytesCriticallyExhausted.md -->
+<!-- ========================================== -->
+
+# CephPoolQuotaBytesCriticallyExhausted
+
+## Meaning
+
+Storage pool quota usage has crossed 90%. One or more pools is approaching a
+configured fullness threshold.
+One threshold that can trigger this warning condition is the
+`mon_pool_quota_warn_threshold` configuration option.
+
+## Impact
+
+Due the quota configured the pool will become readonly when the quota will be
+exhausted completelly
+
+## Diagnosis
+
+[Execute the following Ceph command](helpers/cephCLI.md) to have information
+about pool status in the cluster:
+
+```bash
+    sh-5.1$ rados df
+```
+
+## Mitigation
+
+Pool quotas can be adjusted up or down (or removed) with
+[Ceph CLI](helpers/cephCLI.md)
+
+```bash
+    ceph osd pool set-quota <pool> max_bytes <bytes>
+    ceph osd pool set-quota <pool> max_objects <objects>
+```
+
+Setting the quota value to 0 will disable the quota.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephPoolQuotaBytesNearExhaustion.md -->
+<!-- ========================================== -->
+
+# CephPoolQuotaBytesNearExhaustion
+
+## Meaning
+
+Storage pool quota usage has crossed 70%. One or more pools is approaching a
+configured fullness threshold.
+One threshold that can trigger this warning condition is the
+`mon_pool_quota_warn_threshold` configuration option.
+
+## Impact
+
+Due the quota configured the pool will become readonly when the quota will be
+exhausted completelly
+
+## Diagnosis
+
+[Execute the following Ceph command](helpers/cephCLI.md) to have information
+about pool status in the cluster:
+
+```bash
+    sh-5.1$ rados df
+```
+
+## Mitigation
+
+Pool quotas can be adjusted up or down (or removed) with
+[Ceph CLI](helpers/cephCLI.md)
+
+```bash
+    ceph osd pool set-quota <pool> max_bytes <bytes>
+    ceph osd pool set-quota <pool> max_objects <objects>
+```
+
+Setting the quota value to 0 will disable the quota.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\CephXattrSetLatency.md -->
+<!-- ========================================== -->
+
+# CephXattrSetLatency
+
+## Meaning
+
+This alert indicates that the Ceph Metadata Server (MDS) is experiencing high
+latency when setting extended attributes (xattr) on files. The alert fires when
+the average setxattr operation latency exceeds 30 milliseconds over a 5-minute
+period.
+
+**What are extended attributes (xattrs)?**
+
+Extended attributes are named key/value metadata entries stored alongside
+filesystem objects (inodes, directories, symlinks) in CephFS. They follow POSIX
+conventions with namespace prefixes:
+
+- **user.*** — Application-specific metadata
+- **security.*** — SELinux labels and security contexts
+- **system.*** — POSIX ACLs and system metadata
+- **trusted.*** — Administrative attributes (requires CAP_SYS_ADMIN)
+
+**What does setxattr do?**
+
+The MDS performs setxattr operations on behalf of clients to write or update
+extended attributes. This involves:
+
+- Permission and capability checks
+- Namespace validation
+- In-memory metadata update
+- Journal entry creation and durable commit
+
+## Impact
+
+**Severity:** Warning
+
+High xattr set latency can cause:
+
+- Slow file system operations, particularly for applications that rely heavily
+  on extended attributes (e.g., SELinux, NFSv4 ACLs, backup tools)
+- Degraded overall CephFS performance
+- Application timeouts or failures when interacting with the file system
+- Increased latency for file creation and modification operations
+- Stalled workflows for operations like save, chmod, backup/restore
+
+**Typical latency ranges:**
+
+| Condition | Expected Latency |
+| --------- | ---------------- |
+| Light-load LAN with SSDs | 1–10 ms |
+| Busy clusters or HDD-backed metadata | 10–100+ ms |
+| Under contention, failover, or WAN | 100 ms to seconds |
+
+## Diagnosis
+
+### Step 1: Check MDS Status and Health
+
+Access the Ceph tools pod and check the overall cluster and MDS health:
+
+```bash
+oc rsh -n openshift-storage $(oc get pods -n openshift-storage -l app=rook-ceph-tools -o name)
+```
+
+Run the following commands:
+
+```bash
+ceph status
+ceph mds stat
+ceph fs status
+```
+
+Look for any warnings related to slow metadata IOs or MDS health issues.
+
+### Step 2: Check MDS Performance Metrics
+
+Examine the MDS operations in flight:
+
+```bash
+ceph daemon mds.<mds-name> dump_ops_in_flight
+```
+
+To find the active MDS name:
+
+```bash
+ceph fs status -f json-pretty | jq -r '.mdsmap[] | select(.state=="active") | .name'
+```
+
+PS: requires `jq` or any similar json querying commandline tools (like `gojq`)
+
+### Step 3: Check MDS CPU and Memory Usage
+
+Using the OpenShift console, go to Workloads -> Pods and select the MDS pod
+(e.g., `rook-ceph-mds-ocs-storagecluster-cephfilesystem-*`). Click on the
+Metrics tab to review CPU and memory usage.
+
+Alternatively, check MDS resource usage:
+
+```bash
+oc adm top pod -n openshift-storage -l app=rook-ceph-mds
+```
+
+### Step 4: Check for Network Issues
+
+Network latency between MDS and OSDs can cause slow metadata operations.
+The client-to-MDS RPC round-trip typically adds 0.5–5 ms on LAN, but can be
+significantly higher on loaded or WAN links.
+
+Follow the steps in the
+[Check Ceph Network Connectivity SOP](helpers/networkConnectivity.md)
+to verify network health.
+
+### Step 5: Check OSD Performance
+
+Slow OSD operations can cascade into MDS latency issues. The metadata
+write-to-durable-store step depends on underlying storage performance:
+
+- NVMe: ~0.1–1 ms
+- SSD: ~1–5 ms
+- HDD: significantly higher
+
+Check for slow OSD operations:
+
+```bash
+ceph health detail
+ceph osd perf
+```
+
+### Step 6: Check for Lock Contention
+
+If an inode is locked or requires cross-MDS coordination (cap flushing,
+referrals, recovery), latency can increase by 10s to 100s of milliseconds
+in pathological cases.
+
+Check for blocked operations:
+
+```bash
+ceph daemon mds.<mds-name> dump_blocked_ops
+```
+
+## Mitigation
+
+### Recommended Actions
+
+1. **Increase MDS CPU Resources:**
+
+   If the MDS CPU usage is consistently high, increase the allocated CPU.
+   MDS is largely single-threaded, so higher clock speed CPUs are more
+   effective than additional cores:
+
+   ```bash
+   oc patch -n openshift-storage storagecluster ocs-storagecluster \
+       --type merge \
+       --patch '{"spec": {"resources": {"mds": {"limits": {"cpu": "8"}, "requests": {"cpu": "8"}}}}}'
+   ```
+   **Note:** If the above step doesn't resolve the issue,
+   that is the CPU usage remains high even after the above change,
+   request the next higher power of two (16 CPUs), and repeat as needed
+   (32, 64, etc.).
+
+2. **Increase MDS Cache Memory:**
+
+   If the MDS cache is under pressure, increase the memory allocation:
+
+   ```bash
+   oc patch -n openshift-storage storagecluster ocs-storagecluster \
+       --type merge \
+       --patch '{"spec": {"resources": {"mds": {"limits": {"memory": "8Gi"}, "requests": {"memory": "8Gi"}}}}}'
+   ```
+
+   **Note:** ODF sets `mds_cache_memory_limit` to half of the MDS pod memory
+   request/limit. Setting memory to 8GB results in a 4GB cache limit.
+
+3. **Scale Out with Multiple Active MDS:**
+
+   For high metadata workloads, consider running multiple active MDS instances
+   to reduce lock contention and distribute metadata operations:
+
+   ```bash
+   oc patch -n openshift-storage storagecluster ocs-storagecluster \
+       --type merge \
+       --patch '{"spec": {"managedResources": {"cephFilesystems": {"activeMetadataServers": 2}}}}'
+   ```
+
+   Always increase `activeMetadataServers` by 1. This is effective when
+   metadata load is distributed across multiple directories/PVs.
+
+4. **Use Faster Metadata Storage:**
+
+   If the metadata pool is backed by HDDs, consider migrating to SSD or NVMe
+   storage for improved journal/WAL commit latency.
+
+5. **Address Network Issues:**
+
+   If network connectivity issues are identified, escalate to the network
+   or infrastructure team. Optimize network by lowering RTT and ensuring
+   adequate bandwidth. See
+   [Check Ceph Network Connectivity SOP](helpers/networkConnectivity.md).
+
+6. **Address Underlying OSD Issues:**
+
+   If OSDs are slow, investigate and resolve OSD performance problems first.
+   Slow OSDs directly impact MDS performance. Refer to
+   [CephOSDSlowOps runbook](CephOSDSlowOps.md) for guidance.
+
+7. **Restart MDS (if stuck operations detected):**
+
+   If operations appear stuck due to internal issues, restarting the MDS may
+   help:
+
+   ```bash
+   oc delete pod -n openshift-storage -l app=rook-ceph-mds
+   ```
+
+   The pod will be automatically recreated by the operator.
+
+If the issue persists after taking the above actions, please contact Red Hat
+Support for further assistance.
+
+## Additional Resources
+
+- [Red Hat Ceph Storage Troubleshooting Guide](https://docs.redhat.com/en/documentation/red_hat_ceph_storage/9/html/troubleshooting_guide/index)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ClusterObjectStoreState.md -->
+<!-- ========================================== -->
+
+# ClusterObjectStoreState
+
+## Meaning
+
+RGW endpoint of the Ceph object store is in a failure state,
+OR
+One or more Rook Ceph RGW deployments have fewer ready replicas than required
+for more than 15s.
+
+## Impact
+
+Cluster Object Store is in unhealthy state
+OR
+Number of ready replicas for Rook Ceph RGW deployments is less than the desired
+replicas.
+
+## Diagnosis
+
+Need to check whether the given RGW endpoints are accessible or not.
+Make sure that the Ceph RGW deployments have required number of replicas.
+
+## Mitigation
+
+Please check the health of the Ceph cluster and the deployments and find the
+root cause of the issue.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\HighRBDCloneSnapshotCount.md -->
+<!-- ========================================== -->
+
+# HighRBDCloneSnapshotCount
+
+## Meaning
+
+The number of RBD clones or snapshots (children) of a Ceph RBD image has
+exceeded 200. This metric is derived from `rbd children count` and reflects
+excessive cloning or snapshotting activity on a single base image, typically
+driven by automation such as backup tools or CI/CD pipelines.
+
+## Impact
+
+* Performance degradation during image operations (e.g., deletion,
+  resizing, or cloning).
+* Increased recovery time after failures due to deep clone chains.
+* Potential instability in CSI provisioning and snapshot operations.
+* Higher load on Ceph monitors and OSDs when managing large numbers of child
+  images.
+
+
+## Diagnosis
+
+1. Identify the affected RBD image using the image and radosnamespace labels
+   in the alert.
+2. Enable Rook Ceph toolbox pod:
+```bash
+oc patch storagecluster ocs-storagecluster -n openshift-storage --type json --patch
+'[{ "op": "replace", "path": "/spec/enableCephTools", "value": true }]'
+```
+3. Access the Rook Ceph toolbox pod:
+```bash
+oc -n openshift-storage exec -it <rook-ceph-tools-pod> -- bash
+```
+4. Check the number of children:
+```bash
+rbd children --pool <pool> [--namespace <namespace>] <image-name>
+```
+5. List snapshots (if applicable):
+```bash
+rbd snap ls --pool <pool> [--namespace <namespace>] <image-name>
+```
+6. Correlate with Kubernetes resources:
+    * Find associated PVCs: oc get pv -o jsonpath='{.spec.claimRef.name}'
+      --field-selector=spec.csi.volumeAttributes.imageName=<image-name>
+    * Check VolumeSnapshots: oc get volumesnapshot -A | grep <image-name>
+7. Determine the source:
+    * Is a backup tool (e.g., Velero) creating frequent snapshots?
+    * Is a CI/CD pipeline cloning the same image repeatedly?
+
+## Mitigation
+
+1. Clean up unused PVCs that were created from snapshots:
+```bash
+oc delete pvc <pvc-name> -n <namespace>
+```
+This triggers the CSI driver to clean up the underlying RBD clone.
+
+2. Implement lifecycle policies :
+    * Configure snapshot retention in backup tools (e.g., Velero TTL).
+    * Limit the number of concurrent clones in automation workflows.
+3. Monitor growth rate to catch issues early:
+```bash
+# triggers when an RBD image is, on average , gaining more than 10 new clones
+# or snapshots every second over the past 30 minutes.
+rate(ocs_rbd_children_count[30m]) > 10
+```
+
+
+If the root cause cannot be identified or cleanup fails, escalate to Storage
+SRE with logs, Ceph status, and relevant Kubernetes object details.
+
+
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\KMSServerConnectionAlert.md -->
+<!-- ========================================== -->
+
+# KMSServerConnectionAlert
+
+## Meaning
+
+Storage Cluster KMS Server is in un-connected state for more than 5s.
+Please check KMS config
+
+## Impact
+
+Critical.
+Encryption in block and file storage will not be available.
+Information cannot be retrieved or stored properly.
+
+## Diagnosis
+
+Connection with external key management service is not working.
+
+## Mitigation
+
+Review configuration values in the ´ocs-kms-connection-details´ confimap.
+
+Verify the connectivity with the external KMS, verifying
+[network connectivity](helpers/networkConnectivity.md)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\NooBaaSystemCapacityWarning100.md -->
+<!-- ========================================== -->
+
+# NooBaaSystemCapacityWarning100
+
+## Meaning
+
+NooBaa system capacity is calculated by aggregating the total storage capacity
+of the backingstore resources. It does not include namespacestore resources.
+This alert is triggered when the total used space of the backingstore resources
+reaches 100% of the total capacity.
+
+## Impact
+
+The used storage of all backingstore resources is at 100% of the total capacity.
+The system is out of space and cannot accept new writes.
+
+## Diagnosis
+
+Depending on the type of the backingstore resource, the diagnosis may vary.
+- If the backingstore resource is based on a public cloud provider,
+the free space is always considered to be 1 Petabyte.
+In that case the alert is not relevant.
+- If the backingstore resource is based on a compatible S3 service,
+check the usage and available space of the target bucket used by backingstore.
+- If the backingstore resource is a PV-Pool backingstore, check the usage and
+available space of PVs used by the pv-pool pods.
+
+## Mitigation
+
+- For public cloud providers, there is nothing to do.
+- For compatible S3 services, check the usage and available
+space of the target bucket used by backingstore. If the usage is approaching
+the capacity, consider increasing the capacity of the bucket.
+- For PV-Pool backingstores, check the usage and available space of PVs used
+by the pv-pool pods. If the usage is approaching the capacity, consider
+increasing the number of volumes in the backingstore spec to add new PVs to
+the pool. Notice that the number of volumes cannot be reduced later.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\NooBaaSystemCapacityWarning85.md -->
+<!-- ========================================== -->
+
+# NooBaaSystemCapacityWarning85
+
+## Meaning
+
+NooBaa system capacity is calculated by aggregating the total storage capacity
+of the backingstore resources. It does not include namespacestore resources.
+This alert is triggered when the total used space of the backingstore resources
+reaches 85% of the total capacity.
+
+## Impact
+
+The used storage of all backingstore resources is at 85% of the total capacity.
+The system is out of space and cannot accept new writes.
+
+## Diagnosis
+
+Depending on the type of the backingstore resource, the diagnosis may vary.
+- If the backingstore resource is based on a public cloud provider,
+the free space is always considered to be 1 Petabyte.
+In that case the alert is not relevant.
+- If the backingstore resource is based on a compatible S3 service,
+check the usage and available space of the target bucket used by backingstore.
+- If the backingstore resource is a PV-Pool backingstore, check the usage and
+available space of PVs used by the pv-pool pods.
+
+## Mitigation
+
+- For public cloud providers, there is nothing to do.
+- For compatible S3 services, check the usage and available
+space of the target bucket used by backingstore. If the usage is approaching
+the capacity, consider increasing the capacity of the bucket.
+- For PV-Pool backingstores, check the usage and available space of PVs used
+by the pv-pool pods. If the usage is approaching the capacity, consider
+increasing the number of volumes in the backingstore spec to add new PVs to
+the pool. Notice that the number of volumes cannot be reduced later.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\NooBaaSystemCapacityWarning95.md -->
+<!-- ========================================== -->
+
+# NooBaaSystemCapacityWarning95
+
+## Meaning
+
+NooBaa system capacity is calculated by aggregating the total storage capacity
+of the backingstore resources. It does not include namespacestore resources.
+This alert is triggered when the total used space of the backingstore resources
+reaches 95% of the total capacity.
+
+## Impact
+
+The used storage of all backingstore resources is at 95% of the total capacity.
+The system is out of space and cannot accept new writes.
+
+## Diagnosis
+
+Depending on the type of the backingstore resource, the diagnosis may vary.
+- If the backingstore resource is based on a public cloud provider,
+the free space is always considered to be 1 Petabyte.
+In that case the alert is not relevant.
+- If the backingstore resource is based on a compatible S3 service,
+check the usage and available space of the target bucket used by backingstore.
+- If the backingstore resource is a PV-Pool backingstore, check the usage and
+available space of PVs used by the pv-pool pods.
+
+## Mitigation
+
+- For public cloud providers, there is nothing to do.
+- For compatible S3 services, check the usage and available
+space of the target bucket used by backingstore. If the usage is approaching
+the capacity, consider increasing the capacity of the bucket.
+- For PV-Pool backingstores, check the usage and available space of PVs used
+by the pv-pool pods. If the usage is approaching the capacity, consider
+increasing the number of volumes in the backingstore spec to add new PVs to
+the pool. Notice that the number of volumes cannot be reduced later.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFCorePodRestarted.md -->
+<!-- ========================================== -->
+
+# ODFCorePodRestarted
+
+## Meaning
+
+A core ODF pod (OSD, MON, MGR, ODF operator, or metrics exporter) has
+restarted at least once in the last 24 hours while the Ceph cluster is active.
+
+## Impact
+
+* If OSDs are restarted frequently or do not start up within 5 minutes,
+  the cluster might decide to rebalance the data onto other more reliable
+  disks. If this happens, the cluster will temporarily be slightly less
+  performant.
+* Operator restart delays configuration changes or health checks.
+* May indicate underlying instability (resource pressure, bugs, or node issues).
+
+## Diagnosis
+
+1. Identify pod from alert (pod, namespace).
+2. [pod debug](helpers/podDebug.md)
+
+## Mitigation
+
+1. If OOMKilled: Increase memory limits for the container.
+2. If CrashLoopBackOff: Check for configuration errors or version incompatibilities.
+3. If node-related: Cordon and drain the node; replace if faulty.
+4. Ensure HA: MONs should be ≥3; OSDs should be distributed.
+5. Update: If due to a known bug, upgrade ODF to a fixed version.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFDiskUtilizationHigh.md -->
+<!-- ========================================== -->
+
+# ODFDiskUtilizationHigh
+
+## Meaning
+
+A Ceph OSD disk is >90% busy (as measured by %util from iostat
+semantics via node_disk_io_time_seconds_total), indicating heavy I/O load.
+
+## Impact
+
+* Increased I/O latency for block/object/file clients.
+* Reduced cluster throughput during peak workloads.
+* Potential for “slow request” warnings in Ceph logs.
+
+## Diagnosis
+
+1. Identify node and device from alert labels.
+2. Check disk model and type:
+```bash
+oc debug node/<node>
+lsblk -d -o NAME,ROTA,MODEL
+# Confirm it’s an expected OSD device (HDD/SSD/NVMe)
+```
+3. Monitor real-time I/O:
+```bash
+iostat -x 2 5
+```
+4. Correlate with Ceph:
+```bash
+ceph osd df tree  # check weight and reweight
+ceph osd perf     # check commit/apply latency
+```
+
+## Mitigation
+
+* Add more disks to the cluster enhance the performance.
+* Move the workloads to another storage system.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFNodeLatencyHighOnNonOSDNodes.md -->
+<!-- ========================================== -->
+
+# ODFNodeLatencyHighOnNonOSDNodes
+
+## Meaning
+
+ICMP RTT latency to non-OSD ODF nodes (e.g., MON, MGR, MDS, or client nodes)
+exceeds 100 milliseconds over the last 24 hours. These nodes participate in
+Ceph control plane or client access but do not store data.
+
+## Impact
+
+* Delayed Ceph monitor elections or quorum instability.
+* Slower metadata operations in CephFS.
+* Increased latency for CSI controller operations.
+* Potential timeouts in ODF operator reconciliation.
+* Not support if it is a permanent configuration.
+
+
+## Diagnosis
+
+1. From the alert, note the instance (node IP).
+2. Test connectivity:
+```bash
+ping <node-ip>
+mtr <node-ip>
+```
+3. Check system load and network interface stats on the node:
+```bash
+oc debug node/<node-name>
+sar -n DEV 1 5
+ip -s link show <iface>
+```
+4. Review Ceph monitor logs if the node hosts MONs:
+```bash
+oc logs -l app=rook-ceph-mon -n openshift-storage
+```
+5. switch network monitoring to see if any ports are too busy.
+
+## Mitigation
+
+1. Ensure control-plane nodes are not oversubscribed or co-located with noisy workloads.
+2. Validate network path between MON/MGR nodes—prefer low-latency, dedicated links.
+3. If node is a client (e.g., running applications), verify it’s not on an
+   overloaded subnet.
+4. Tune kernel network parameters if packet loss or buffer drops are observed.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFNodeLatencyHighOnOSDNodes.md -->
+<!-- ========================================== -->
+
+# ODFNodeLatencyHighOnOSDNodes
+
+## Meaning
+
+ICMP round-trip time (RTT) latency between ODF monitoring probes and
+OSD nodes exceeds 10 milliseconds over the last 24 hours. This alert
+triggers only on nodes that host Ceph OSD pods, indicating potential
+network congestion or issues on the storage network.
+
+## Impact
+
+* Increased latency in Ceph replication and recovery operations.
+* Higher client I/O latency for RBD and CephFS workloads.
+* Risk of OSDs being marked down if heartbeat timeouts occur.
+* Degraded cluster performance and possible client timeouts.
+
+
+## Diagnosis
+
+1. Check the alert’s instance label to get the node IP.
+2. From a monitoring or debug pod, test connectivity:
+```bash
+ping <node-internal-ip>
+```
+3. Use mtr or traceroute to analyze path and hops.
+4. Verify if the node is under high CPU or network load:
+```bash
+oc debug node/<node>
+top -b -n 1 | head -20
+sar -u 1 5
+```
+5. Check Ceph health and OSD status:
+```bash
+ceph osd status
+ceph -s
+```
+
+## Mitigation
+
+1. Isolate traffic: Confirm storage traffic uses a dedicated VLAN or NIC, separate
+    from management/tenant traffic.
+2. Hardware check: Inspect switch logs, NIC errors (ethtool -S <iface>),
+    and NIC firmware.
+3. Topology: Ensure OSD nodes are in the same rack/zone or connected via
+    low-latency fabric.
+4. If latency is transient, monitor; if persistent, engage network or
+    infrastructure team.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFNodeMTULessThan9000.md -->
+<!-- ========================================== -->
+
+# ODFNodeMTULessThan9000
+
+## Meaning
+
+At least one physical or relevant network interface on an ODF node has an
+MTU (Maximum Transmission Unit) less than 9000 bytes, violating ODF best
+practices for storage networks.
+
+## Impact
+
+* Suboptimal Ceph network performance due to increased packet overhead.
+* Higher CPU utilization on OSD nodes from processing more packets.
+* Potential for packet fragmentation if mixed MTU sizes exist in the path.
+* Reduced throughput during rebalancing or recovery.
+
+
+## Diagnosis
+
+1. List all nodes in the storage cluster:
+```bash
+oc get nodes -l cluster.ocs.openshift.io/openshift-storage=''
+```
+2. For each node, check interface MTUs:
+```bash
+oc debug node/<node-name>
+ip link show
+# Look for interfaces like eth0, ens*, eno*, etc. (exclude veth, docker, cali)
+```
+3. Alternatively, use Prometheus:
+```promql
+node_network_mtu_bytes{device!~"^(veth|docker|flannel|cali|tun|tap).*"} < 9000
+```
+4. Verify MTU consistency across all nodes and all switches in the storage fabric.
+
+## Mitigation
+
+1. Ensure the node network interfaces are configured for 9000 bytes
+2. Ensure switches in between the nodes support 9000 bytes on their ports.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFNodeNICBandwidthSaturation.md -->
+<!-- ========================================== -->
+
+# ODFNodeNICBandwidthSaturation
+
+## Meaning
+
+A network interface on an ODF node is operating at >90% of its reported
+link speed, indicating potential bandwidth saturation.
+
+## Impact
+
+* Network congestion leading to packet drops or latency spikes.
+* Slowed Ceph replication, backfill, and recovery.
+* Client I/O timeouts or stalls.
+* Possible Ceph OSD evictions due to heartbeat failures.
+
+## Diagnosis
+
+1. From alert, note instance and device.
+2. Check current utilization:
+```bash
+oc debug node/<node>
+sar -n DEV 1 5
+```
+3. Use Prometheus to graph:
+```promql
+rate(node_network_receive_bytes_total{instance="<ip>", device="<dev>"}[5m]) * 8
+rate(node_network_transmit_bytes_total{...}) * 8
+```
+4. Determine if traffic is Ceph-related (e.g., during rebalance) or external.
+
+## Mitigation
+
+1. Short term: Throttle non-essential traffic on the node.
+    * Taint the OSD node to prevent scheduling of non-storage workloads.
+    * Drain existing non-essential pods from the node.
+2. Long term:
+    * Upgrade to higher-speed NICs (e.g., 25GbE → 100GbE).
+    * Use multiple bonded interfaces with LACP.
+    * Separate storage and client traffic using VLANs or dedicated NICs.
+3. Tune Ceph osd_max_backfills, osd_recovery_max_active to reduce
+   recovery bandwidth.
+4. Enable NIC offload features (TSO, GRO) if disabled.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFOperatorNotUpgradeable.md -->
+<!-- ========================================== -->
+
+# ODFOperatorNotUpgradeable
+
+## Meaning
+
+The ODF Operator has been marked as not upgradeable. This indicates that
+there are conditions preventing a safe upgrade to the next ODF version.
+
+## Impact
+
+The ODF cluster cannot be upgraded to the next version until the underlying
+issue is resolved or the condition is overridden. This may delay critical
+updates, security patches, or new features.
+
+## Diagnosis
+
+### Step 1: Check the OperatorCondition CR
+
+Get the OperatorCondition CR for the ODF operator to identify the specific issue:
+
+```bash
+oc get operatorconditions -n openshift-storage
+```
+
+Get detailed information about the odf operator condition:
+
+**Note**: If you see two odf-operator conditions, pick the name with the oldest
+version.
+
+```bash
+oc get operatorconditions -n openshift-storage <odf-operator-condition-name> -o yaml
+```
+
+Look for the `Upgradeable` condition in `spec.conditions`. The condition will contain:
+- `type`: Upgradeable
+- `status`: "False" indicates not upgradeable
+- `reason`: The reason why the operator is not upgradeable
+- `message`: Detailed description of the issue
+
+### Step 2: Check the underlying component
+
+Examine the `message` field from the OperatorCondition. If the issue
+originates from a dependent operator (not odf-operator itself), the message
+will be prefixed with that operator's name followed by a colon.
+
+For example:
+
+```text
+message: 'ocs-operator.v4.21.0-25.stable:CephCluster health is HEALTH_WARN...'
+```
+
+In this case, `ocs-operator.v4.21.0-25.stable` is the dependent operator
+reporting the issue.
+
+Based on the `reason` and `message` from the OperatorCondition, investigate
+the specific component that is causing the issue. Common reasons include:
+- OCP Version
+- OCP Upgrade status
+- Ceph cluster health issues
+
+Check the specific component's status and logs to understand the root cause.
+
+## Mitigation
+
+### Option 1: Resolve the underlying issue (Recommended)
+
+Address the specific issue mentioned in the OperatorCondition message. For
+example, If Ceph health is HEALTH_WARN, resolve the Ceph issues first.
+
+Once the issue is resolved, the operator will automatically mark itself as
+upgradeable again.
+
+### Option 2: Override the condition (Use with caution)
+
+If you have verified that the issue is non-critical or you need to proceed
+with the upgrade despite the condition, you can override the upgradeable
+status.
+
+**Warning**: Overriding the upgradeable condition bypasses safety checks and
+may lead to upgrade failures or data loss. Only override if you fully
+understand the risks.
+
+**Note**: The override needs to be applied on the component operator from which
+the condition actually originates, which would have been found in Step 2: Check
+the underlying component.
+
+
+To override:
+
+```bash
+oc patch operatorconditions -n openshift-storage <operator-condition-name> --type=merge -p '
+spec:
+  overrides:
+  - type: Upgradeable
+    status: "True"
+    reason: ManualOverride
+    message: "Manually overriding upgradeable condition"
+'
+```
+
+Note: `spec.overrides` takes precedence over `spec.conditions` according to
+the OLM behavior.
+
+## Additional Resources
+
+- [OLM Operator Conditions Documentation]
+(https://olm.operatorframework.io/docs/advanced-tasks/communicating-operator-conditions-to-olm/)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFPersistentVolumeMirrorStatus.md -->
+<!-- ========================================== -->
+
+# ODFPersistentVolumeMirrorStatus
+
+## Meaning
+
+The alert 'ODFPersistentVolumeMirrorStatus' indicates the mirroring status of
+persistent volumes (PVs) in a Ceph pool. The two specific alert instances are
+defined as follows:
+
+1. **Critical Alert:**
+   - The mirroring image(s) (PV) in a pool are not mirrored properly to the peer
+     site for more than the specified alert time.
+   - RBD image, CephBlockPool, and affected persistent volume details are
+     provided in the alert message.
+
+2. **Warning Alert:**
+   - The status is unknown for the mirroring of persistent volumes (PVs) to the
+     peer site for more than the specified alert time.
+   - RBD image, CephBlockPool, and affected persistent volume details are
+     included in the alert message.
+
+## Impact
+
+- **Critical Alert:**
+  - Critical severity indicates that the mirroring of the PVs is not working
+    correctly.
+  - Disaster recovery may be affected, leading to potential data inconsistencies
+    during failover.
+
+- **Warning Alert:**
+  - Warning severity implies an unknown status in mirroring, posing a potential
+    risk to data consistency during failover.
+
+## Diagnosis
+
+Verify the mirroring status of the affected PVs using the
+[Ceph CLI](helpers/cephCLI.md):
+
+```bash
+rbd mirror image status POOL_NAME/IMAGE_NAME
+```
+
+## Mitigation
+
+Review [RBD mirrorpod](helpers/podDebug.md) to find out more information about
+the problem.
+
+[gather_logs](helpers/gatherLogs.md) to provide more information to support
+teams.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ODFRBDClientBlocked.md -->
+<!-- ========================================== -->
+
+# ODFRBDClientBlocked
+
+## Meaning
+
+This alert indicates that an RBD client might be blocked by Ceph on a specific
+node within your Kubernetes cluster. The blocklisting occurs when the
+`ocs_rbd_client_blocklisted metric` reports a value of 1 for the node.
+Additionally, there are pods in a CreateContainerError state on the same node.
+The blocklisting can potentially result in the filesystem for the Persistent
+Volume Claims (PVCs) using RBD becoming read-only.
+It is crucial to investigate this alert to prevent any disruption to your
+storage cluster.
+
+## Impact
+
+High. It is crucial to investigate this alert to prevent any disruption to your
+storage cluster.
+This may cause the filesystem for the PVCs to be in a read-only state.
+
+## Diagnosis
+
+The blocklisting of an RBD client can occur due to several factors, such as
+network or cluster slowness. In certain cases, the exclusive lock contention
+among three contending clients (workload, mirror daemon, and manager/scheduler)
+ can lead to the blocklist.
+
+## Mitigation
+
+Taint the blocklisted node: In Kubernetes, consider tainting the node that is
+blocklisted to trigger the eviction of pods to another node. This approach
+relies on the assumption that the unmounting/unmapping process progresses
+gracefully. Once the pods have been successfully evicted, the blocklisted node
+can be untainted, allowing the blocklist to be cleared. The pods can then be
+moved back to the untainted node.
+
+Reboot the blocklisted node: If tainting the node and evicting the pods do not
+resolve the blocklisting issue, a reboot of the blocklisted node can be
+attempted. This step may help alleviate any underlying issues causing the
+blocklist and restore normal functionality.
+
+Please note that investigating and resolving the blocklist issue promptly is
+essential to avoid any further impact on the storage cluster.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\OSDCPULoadHigh.md -->
+<!-- ========================================== -->
+
+# OSDCpuLoadHigh
+
+## Meaning
+
+This alert indicates that the CPU usage in the OSD (Object Storage Daemon)
+container on a specific pod has exceeded 80%, potentially affecting the
+performance of the OSD.
+
+## Impact
+
+OSD is a critical component in Ceph storage, responsible for managing data
+placement and recovery. High CPU usage in the OSD container suggests increased
+processing demands, potentially leading to degraded storage performance.
+
+## Diagnosis
+
+To diagnose the alert, follow these steps:
+
+1. Navigate to the Kubernetes dashboard or equivalent.
+2. Access the "Workloads" section and select the relevant pod associated with
+the OSD alert.
+3. Click on the "Metrics" tab to view CPU metrics for the OSD container.
+4. Verify that the CPU usage exceeds 80% over a significant period
+(as specified in the alert configuration).
+
+## Mitigation
+
+If the OSD CPU usage is consistently high, consider taking the following steps:
+
+1. Evaluate the overall storage cluster performance and identify the OSDs
+contributing to high CPU usage.
+2. Increase the number of OSDs in the cluster by adding more new storage
+devices in the existing nodes or adding new nodes with new storage devices.
+Review the Openshift Scaling storage documentation. This would help distribute
+the load and improve overall system performance.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ObcQuotaBytesAlert.md -->
+<!-- ========================================== -->
+
+# ObcQuotaBytesAlert
+
+## Meaning
+
+The 'ObcQuotaBytesAlert' is triggered when an ObjectBucketClaim (OBC) has
+crossed 80% of its quota in bytes.
+
+## Impact
+
+The OBC has reached 80% of its quota, and it will become read-only on reaching
+the quota limit. This may impact write operations to the ObjectBucketClaim.
+
+## Diagnosis
+
+Check the usage of the ObjectBucketClaim and its quota to determine the extent
+of the breach:
+
+```bash
+ocs_objectbucketclaim_info * on (namespace, objectbucket) group_left() (ocs_objectbucket_used_bytes/ocs_objectbucket_max_bytes)
+```
+
+## Mitigation
+
+- Review and Increase Quota: Update the quota options on the OBC using the
+  following YAML configuration in the CRD:
+
+```yaml
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim  
+metadata:  
+  name: <obc name>  
+  namespace: <namespace>  
+spec:  
+  bucketName:  <name of the backend bucket>  
+  storageClassName: <name of storage class>  
+  additionalConfig:   
+    maxObjects: "1000" # sets limit on the number of objects this OBC can hold  
+    maxSize: "2G" # sets the max limit for the size of data this OBC can hold
+```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ObcQuotaBytesExhausedAlert.md -->
+<!-- ========================================== -->
+
+# ObcQuotaBytesExhausedAlert
+
+## Meaning
+
+This is the next stage once we have reached [ObcQuotaObjectsAlert](ObcQuotaObjectsAlert.md).
+ObjectBucketClaim has crossed the limit set by the quota(bytes) and will be
+read-only now. Increase the quota in the OBC custom resource immediately.
+
+## Impact
+
+OBC has exhausted and reached it's limit.
+
+## Diagnosis
+
+Alert message will clearly indicate which OBC has reached the quota bytes limit.
+Look at the deployments attached to the OBC and see what all apps are
+using/filling-up the OBC.
+
+## Mitigation
+
+Need to increase the quota limit immediately for the ObjectBucketClaim
+custom resource. We can set quota option on OBC by using the `maxObjects`
+and `maxSize` options in the ObjectBucketClaim CRD
+
+```yaml
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: <obc_name>
+  namespace: <namespace>
+spec:
+  bucketName: <name_of_the_backend_bucket>
+  storageClassName: <name_of_storage_class>
+  additionalConfig:
+    maxObjects: "1000" # sets limit on no of objects this obc can hold
+    maxSize: "2G" # sets max limit for the size of data this obc can hold
+```
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ObcQuotaObjectsAlert.md -->
+<!-- ========================================== -->
+
+# ObcQuotaObjectsAlert
+
+## Meaning
+
+An ObjectBucketClaim object has crossed 80% of the size limit set by the quota(objects)
+and will become read-only on reaching the quota limit.
+
+## Impact
+
+OBC has reached 80% of it's limit and soon will get exhausted once reaching
+the quota limit.
+
+## Diagnosis
+
+Alert message will clearly indicate which OBC is being filled up fast.
+Look at the deployments attached to the OBC and
+see what all apps are using/filling-up the OBC.
+
+## Mitigation
+
+We can increase quota option on OBC by using the `maxObjects` and
+`maxSize` options in the ObjectBucketClaim CRD
+
+```yaml
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: <obc_name>
+  namespace: <namespace>
+spec:
+  bucketName: <name_of_the_backend_bucket>
+  storageClassName: <name_of_storage_class>
+  additionalConfig:
+    maxObjects: "1000" # sets limit on no of objects this obc can hold
+    maxSize: "2G" # sets max limit for the size of data this obc can hold
+```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\ObcQuotaObjectsExhausedAlert.md -->
+<!-- ========================================== -->
+
+# ObcQuotaObjectsExhausedAlert
+
+## Meaning
+
+ObjectBucketClaim has crossed the limit set by the quota(objects) and
+will be read-only now.
+
+## Impact
+
+Application won't be able to do any transaction through the OBC and will be stalled.
+
+## Diagnosis
+
+Alert message will indicate which OBC has reached the object quota limit.
+Look at the deployments attached to the OBC and
+see what all apps are using/filling-up the OBC.
+
+## Mitigation
+
+Immediately increase the quota for the OBC, specified in the alert details.
+We can increase quota option on OBC by using the `maxObjects` and
+`maxSize` options in the ObjectBucketClaim CRD
+
+```yaml
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: <obc_name>
+  namespace: <namespace>
+spec:
+  bucketName: <name_of_the_backend_bucket>
+  storageClassName: <name_of_storage_class>
+  additionalConfig:
+    maxObjects: "1000" # sets limit on no of objects this obc can hold
+    maxSize: "2G" # sets max limit for the size of data this obc can hold
+```
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\OdfMirrorDaemonStatus.md -->
+<!-- ========================================== -->
+
+# OdfMirrorDaemonStatus
+
+## Meaning
+
+Mirror daemon is in unhealthy status for more than 1 minute. Mirroring on this
+cluster is not working as expected. Disaster recovery is failing for the entire
+cluster.
+
+## Impact
+
+Critical.
+
+The mirroring operations are stopped. No images will be synced until RBD mirror
+daemon will be started and running properly.
+Disaster recovery functionality will not work properly until RBD mirror daemons
+will be running an all images synced properly.
+
+## Diagnosis
+
+The RBD mirror pod in the Openshift storage namespace is in error state.
+
+## Mitigation
+
+Review [RBD mirrorpod](helpers/podDebug.md) to find out more information about
+the problem.
+
+[gather_logs](helpers/gatherLogs.md) to provide more information to support
+teams.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\OdfPoolMirroringImageHealth.md -->
+<!-- ========================================== -->
+
+# OdfPoolMirroringImageHealth
+
+## Meaning
+
+Mirroring image(s) (PV) a pool are in Unknown state for more than 1 minute.
+Mirroring might not work as expected.
+
+## Impact
+
+Critical.
+Image duplication to the remote cluster is not working. Disaster recovery
+cluster will be affected because in case of failover the information will not
+be synced with the source cluster properly
+
+## Diagnosis
+
+Verify images status using the [Ceph CLI](helpers/cephCLI.md):
+
+```bash
+    rbd mirror image status POOL_NAME/IMAGE_NAME
+```
+
+## Mitigation
+
+Review [RBD mirrorpod](helpers/podDebug.md) to find out more information about
+the problem.
+
+[gather_logs](helpers/gatherLogs.md) to provide more information to support
+teams.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-container-storage-operator\PersistentVolumeUsageCritical.md -->
+<!-- ========================================== -->
+
+# PersistentVolumeUsageCritical
+
+## Meaning
+
+A PVC is nearing its full capacity and may lead to data loss if not attended to
+timely. The alert will be fired when Persistent Volume Claim usage has exceeded
+the final threshold limit of its capacity.
+Please see the alert documentation text for an exact threshold limit.
+
+## Impact
+
+A PVC is about to be exhausted, any Write in PVS using this PVC will be blocked
+when PVC will not have available space.
+
+## Diagnosis
+
+Using the Openshift console, go to Storage-PersistentVolumeClaims.
+A list of the available PVCs with basic information about space used and
+available will be shown.
+Enter in the PVC affected to have more details.
+
+
+## Mitigation
+
+Expand the PVC size to increase the capacity.
+In the list of PVCs (Storage-PersistentVolumeClaims), press the "three points"
+button shown at the end of the affected PVC row. Select "Expand PVC" and
+increase the size of the PVC.
+
+![pvc-dropdown](helpers/screenshots/expand-pvc-dropdown.png)
+![pvc-dialog](helpers/screenshots/expand-pvc-dialog.png)
+
+Alternatively, you can also delete unnecessary data in PVs that may be taking
+ up space
+
+
+
+

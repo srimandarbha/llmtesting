@@ -1,0 +1,3897 @@
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\KubeVirtVMIExcessiveMigrations.md -->
+<!-- ========================================== -->
+
+# KubeVirtVMIExcessiveMigrations
+
+## Meaning
+
+This alert fires when a virtual machine instance (VMI) live migrates more than
+12 times over a period of 24 hours.
+
+This migration rate is abnormally high, even during an upgrade. This alert might
+indicate a problem in the cluster infrastructure, such as network disruptions or
+insufficient resources.
+
+## Impact
+
+A virtual machine (VM) that migrates too frequently might experience degraded
+performance because memory page faults occur during the transition.
+
+## Diagnosis
+
+1. Verify that the worker node has sufficient resources:
+
+   ```bash
+   $ oc get nodes -l node-role.kubernetes.io/worker= -o json | jq .items[].status.allocatable
+   ```
+
+   Example output:
+
+   ```json
+   {
+     "cpu": "3500m",
+     "devices.kubevirt.io/kvm": "1k",
+     "devices.kubevirt.io/sev": "0",
+     "devices.kubevirt.io/tun": "1k",
+     "devices.kubevirt.io/vhost-net": "1k",
+     "ephemeral-storage": "38161122446",
+     "hugepages-1Gi": "0",
+     "hugepages-2Mi": "0",
+     "memory": "7000128Ki",
+     "pods": "250"
+   }
+   ```
+
+2. Check the status of the worker node:
+
+   ```bash
+   $ oc get nodes -l node-role.kubernetes.io/worker= -o json | jq .items[].status.conditions
+   ```
+
+   Example output:
+
+   ```json
+   {
+     "lastHeartbeatTime": "2022-05-26T07:36:01Z",
+     "lastTransitionTime": "2022-05-23T08:12:02Z",
+     "message": "kubelet has sufficient memory available",
+     "reason": "KubeletHasSufficientMemory",
+     "status": "False",
+     "type": "MemoryPressure"
+   },
+   {
+     "lastHeartbeatTime": "2022-05-26T07:36:01Z",
+     "lastTransitionTime": "2022-05-23T08:12:02Z",
+     "message": "kubelet has no disk pressure",
+     "reason": "KubeletHasNoDiskPressure",
+     "status": "False",
+     "type": "DiskPressure"
+   },
+   {
+     "lastHeartbeatTime": "2022-05-26T07:36:01Z",
+     "lastTransitionTime": "2022-05-23T08:12:02Z",
+     "message": "kubelet has sufficient PID available",
+     "reason": "KubeletHasSufficientPID",
+     "status": "False",
+     "type": "PIDPressure"
+   },
+   {
+     "lastHeartbeatTime": "2022-05-26T07:36:01Z",
+     "lastTransitionTime": "2022-05-23T08:24:15Z",
+     "message": "kubelet is posting ready status",
+     "reason": "KubeletReady",
+     "status": "True",
+     "type": "Ready"
+   }
+   ```
+
+3. Log in to the worker node and verify that the `kubelet` service is running:
+
+   ```bash
+   $ systemctl status kubelet
+   ```
+
+4. Check the `kubelet` journal log for error messages:
+
+   ```bash
+   $ journalctl -r -u kubelet
+   ```
+
+## Mitigation
+
+Ensure that the worker nodes have sufficient resources (CPU, memory, disk) to
+run VM workloads without interruption.
+
+If the problem persists, try to identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\KubemacpoolDown.md -->
+<!-- ========================================== -->
+
+# KubemacpoolDown
+
+## Meaning
+
+`KubeMacPool` is down. `KubeMacPool` is responsible for allocating MAC addresses
+and preventing MAC address conflicts.
+
+## Impact
+
+If `KubeMacPool` is down, `VirtualMachine` objects cannot be created.
+
+## Diagnosis
+
+1. Set the `KMP_NAMESPACE` environment variable:
+
+   ```bash
+   $ export KMP_NAMESPACE="$(oc get pod -A --no-headers -l \
+      control-plane=mac-controller-manager | awk '{print $1}')"
+   ```
+
+2. Set the `KMP_NAME` environment variable:
+
+   ```bash
+   $ export KMP_NAME="$(oc get pod -A --no-headers -l \
+      control-plane=mac-controller-manager | awk '{print $2}')"
+   ```
+
+3. Obtain the `KubeMacPool-manager` pod details:
+
+   ```bash
+   $ oc describe pod -n $KMP_NAMESPACE $KMP_NAME
+   ```
+
+4. Check the `KubeMacPool-manager` logs for error messages:
+
+   ```bash
+   $ oc logs -n $KMP_NAMESPACE $KMP_NAME
+   ```
+
+## Mitigation
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\KubemacpoolMACCollisionDetected.md -->
+<!-- ========================================== -->
+
+# KubemacpoolMACCollisionDetected
+
+## Meaning
+
+Multiple running workloads are using the same MAC address.
+
+## Impact
+
+MAC collisions cause network issues: packet loss, ARP table conflicts, and
+traffic being delivered to the wrong targets.
+
+## Diagnosis
+
+1. Query the `kmp_mac_collisions` metric to see which MACs are colliding
+   (value > 1 means collision):
+
+
+
+   **Note:** You can use the Openshift metrics explorer available at
+'https://{OPENSHIFT_BASE_URL}/monitoring/query-browser'.
+
+   ```promql
+   $ kmp_mac_collisions > 1
+   ```
+
+2. For each colliding MAC, find the VMIs involved:
+
+   ```bash
+   $ export MAC=<MAC_ADDRESS>
+   $ oc get vmi -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.status.interfaces[*].mac}{"\n"}{end}' | grep -i "$MAC"
+   ```
+
+4. For each colliding MAC, find Pods with Multus secondary interfaces involved:
+
+   ```bash
+   $ export MAC=<MAC_ADDRESS>
+   $ oc get pod -A -o json | jq -r --arg mac "$MAC" '.items[] | .metadata as $m | (.metadata.annotations["k8s.v1.cni.cncf.io/network-status"] // "[]" | fromjson)[] | select(.mac // "" | test($mac; "i")) | "\($m.namespace)\t\($m.name)\t\(.mac)"'
+   ```
+
+## Mitigation
+
+Remove the collision by deleting or reconfiguring one of the colliding
+workloads to use a different MAC address.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\KubevirtVmHighMemoryUsage.md -->
+<!-- ========================================== -->
+
+# KubevirtVmHighMemoryUsage [Deprecated]
+
+This alert is deprecated. You can safely ignore or silence it.
+
+
+## Meaning
+
+This alert fires when a container hosting a virtual machine (VM) has less than
+20 MB free memory.
+
+## Impact
+
+The virtual machine running inside the container is terminated by the runtime
+if the container's memory limit is exceeded.
+
+## Diagnosis
+
+1. Obtain the `virt-launcher` pod details:
+
+   ```bash
+   $ oc get pod <virt-launcher> -o yaml
+   ```
+
+2. Identify `compute` container processes with high memory usage in the
+`virt-launcher` pod:
+
+   ```bash
+   $ oc exec -it <virt-launcher> -c compute -- top
+   ```
+
+## Mitigation
+
+- Increase the memory limit in the `VirtualMachine` specification as in the
+following example:
+
+   ```yaml
+   spec:
+     running: false
+     template:
+       metadata:
+         labels:
+           kubevirt.io/vm: vm-name
+       spec:
+         domain:
+           resources:
+             limits:
+               memory: 200Mi
+             requests:
+               memory: 128Mi
+   ```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowKVMNodesCount.md -->
+<!-- ========================================== -->
+
+# LowKVMNodesCount
+
+## Meaning
+
+This alert fires when fewer than two nodes in the cluster have KVM resources.
+
+## Impact
+
+The cluster must have at least two nodes with KVM resources for live migration.
+
+Virtual machines cannot be scheduled or run if no nodes have KVM resources.
+
+## Diagnosis
+
+- Identify the nodes with KVM resources:
+
+  ```bash
+  $ oc get nodes --o custom-columns=NAME:.metadata.name,KVM:".status.allocatable.devices\.kubevirt\.io/kvm"
+  ```
+
+## Mitigation
+
+Install KVM on the nodes without KVM resources.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowReadyVirtAPICount.md -->
+<!-- ========================================== -->
+
+# LowReadyVirtAPICount
+
+## Meaning
+
+This alert fires when one or more `virt-api` pods are running, but not
+all of them have been in a `Ready` state for the last 10 minutes.
+
+The `virt-api` serves the OpenShift Virtualization API. The deployment
+typically runs two
+replicas for high-availability.
+
+## Impact
+
+Reduced capacity or redundancy for the OpenShift Virtualization API. If the
+condition
+persists, it can lead to the `NoReadyVirtAPI` alert and API unavailability.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o jsonpath='{.items[].metadata.namespace}')"
+   ```
+
+2. Check the status of the `virt-api` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-api
+   ```
+
+3. Check the `virt-api` deployment and its events:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-api
+   ```
+
+4. Check pod readiness and conditions for non-ready pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-api -o wide
+   $ oc -n $NAMESPACE describe pod -l kubevirt.io=virt-api
+   ```
+
+5. If pods are in `CrashLoopBackOff` or to inspect runtime failures, check
+   `virt-api` pod logs and look for errors:
+
+   ```bash
+   $ oc -n $NAMESPACE logs -l kubevirt.io=virt-api
+   ```
+
+6. Check for node issues, such as a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Identify why some `virt-api` pods are not ready (e.g. failed readiness probe,
+resource pressure, image pull issues) and resolve the underlying cause.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowReadyVirtControllersCount.md -->
+<!-- ========================================== -->
+
+# LowReadyVirtControllersCount
+
+## Meaning
+
+This alert fires when one or more `virt-controller` pods are running, but not
+all of them have been in a `Ready` state for the last 10 minutes.
+
+A `virt-controller` device monitors the custom resource definitions (CRDs) of a
+virtual machine instance (VMI) and manages the associated pods. The device
+create pods for VMIs and manages the lifecycle of the pods. The device is
+critical for cluster-wide virtualization functionality.
+
+## Impact
+
+This alert indicates that a cluster-level failure might occur, which would cause
+actions related to VM lifecycle management to fail. This notably includes
+launching a new VMI or shutting down an existing VMI.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Verify a `virt-controller` device is available:
+
+   ```bash
+   $ oc get deployment -n $NAMESPACE virt-controller -o jsonpath='{.status.readyReplicas}'
+   ```
+
+3. Check the status of the `virt-controller` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-controller -o yaml
+   ```
+
+4. Obtain the details of the `virt-controller` deployment to check for status
+conditions, such as crashing pods or failures to pull images:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-controller
+   ```
+
+5. Check if any problems occurred with the nodes. For example, they might be in
+a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+This alert can have multiple causes, including the following:
+
+- The cluster has insufficient memory.
+- The nodes are down.
+- The API server is overloaded. For example, the scheduler might be under a
+heavy load and therefore not completely available.
+- There are network issues.
+
+Try to identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowReadyVirtHandlerCount.md -->
+<!-- ========================================== -->
+
+# LowReadyVirtHandlerCount
+
+## Meaning
+
+This alert fires when one or more `virt-handler` pods are running, but not
+all of them have been in a `Ready` state for the last 10 minutes.
+
+The `virt-handler` runs on every node that can schedule VMIs (as a
+DaemonSet). Each node typically has one `virt-handler` pod.
+
+## Impact
+
+Some nodes may have a running but not ready `virt-handler`. VMIs running on those
+nodes might not be fully managed (e.g. domain updates, network or storage
+changes). If the condition persists, it can lead to the `NoReadyVirtHandler`
+alert for affected nodes.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-handler` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-handler -o wide
+   ```
+
+3. For pods that are running but not ready, inspect pod conditions and events:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pod -l kubevirt.io=virt-handler
+   ```
+
+4. If pods are in `CrashLoopBackOff` or to inspect runtime failures, check
+   non-ready `virt-handler` pod logs and look for errors:
+
+   ```bash
+   $ oc -n $NAMESPACE logs -l kubevirt.io=virt-handler
+   ```
+
+   Note: With multiple pods (DaemonSet), `-l` streams one pod's logs; use a
+   pod name from step 2 to target a specific non-ready pod.
+
+5. If needed, check the `virt-handler` DaemonSet and its events:
+
+   ```bash
+   $ oc -n $NAMESPACE describe daemonset virt-handler
+   ```
+
+6. Check for node issues on nodes where `virt-handler` is not ready:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Identify why some `virt-handler` pods are not ready (e.g. failed readiness
+probe, resource pressure, node issues) and resolve the underlying cause so
+all schedulable nodes have a ready `virt-handler`.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowReadyVirtOperatorsCount.md -->
+<!-- ========================================== -->
+
+# LowReadyVirtOperatorsCount
+
+## Meaning
+
+This alert fires when one or more `virt-operator` pods are running, but not
+all of them have been in a `Ready` state for the last 10 minutes.
+
+The `virt-operator` is the first Operator to start in a cluster. The
+`virt-operator` deployment has a default replica of two `virt-operator` pods.
+
+Its primary responsibilities include the following:
+
+- Installing, live-updating, and live-upgrading a cluster
+- Monitoring the lifecycle of top-level controllers, such as `virt-controller`,
+`virt-handler`, `virt-launcher`, and managing their reconciliation
+- Certain cluster-wide tasks, such as certificate rotation and infrastructure
+management
+
+## Impact
+
+A cluster-level failure might occur. Critical cluster-wide management
+functionalities, such as certification rotation, upgrade, and reconciliation of
+controllers, might become unavailable. Such a state also triggers the
+`NoReadyVirtOperator` alert.
+
+The `virt-operator` is not directly responsible for virtual machines (VMs) in
+the cluster. Therefore, its temporary unavailability does not significantly
+affect VM workloads.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Obtain the name of the `virt-operator` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-operator -o yaml
+   ```
+
+3. Obtain the details of the `virt-operator` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-operator
+   ```
+
+4. Check for node issues, such as a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowVirtAPICount.md -->
+<!-- ========================================== -->
+
+# LowVirtAPICount
+
+## Meaning
+
+This alert fires when only one available `virt-api` pod is detected during a
+60-minute period, although at least two nodes are available for scheduling.
+
+## Impact
+
+An API call outage might occur during node eviction because the `virt-api` pod
+becomes a single point of failure.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the number of available `virt-api` pods:
+
+   ```bash
+   $ oc get deployment -n $NAMESPACE virt-api -o jsonpath='{.status.readyReplicas}'
+   ```
+
+3. Check the status of the `virt-api` deployment for error conditions:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-api -o yaml
+   ```
+
+4. Check the nodes for issues such as nodes in a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Try to identify the root cause and to resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowVirtControllersCount.md -->
+<!-- ========================================== -->
+
+# LowVirtControllersCount
+
+## Meaning
+
+This alert fires when a low number of `virt-controller` pods is detected. At
+least one `virt-controller` pod must be available in order to ensure high
+availability. The default number of replicas is 2.
+
+A `virt-controller` device monitors the custom resource definitions (CRDs) of a
+virtual machine instance (VMI) and manages the associated pods. The device
+create pods for VMIs and manages the lifecycle of the pods. The device is
+critical for cluster-wide virtualization functionality.
+
+## Impact
+
+The responsiveness of OpenShift Virtualization might become negatively
+affected. For example,
+certain requests might be missed.
+
+In addition, if another `virt-controller` instance terminates unexpectedly,
+OpenShift Virtualization might become completely unresponsive.
+
+## Diagnosis
+
+1. Verify that running `virt-controller` pods are available:
+
+   ```bash
+   $ oc -n openshift-cnv get pods -l kubevirt.io=virt-controller
+   ```
+
+2. Check the `virt-controller` logs for error messages:
+
+   ```bash
+   $ oc -n openshift-cnv logs <virt-controller>
+   ```
+
+3. Obtain the details of the `virt-controller` pod to check for status
+conditions such as unexpected termination or a `NotReady` state.
+
+   ```bash
+   $ oc -n openshift-cnv describe pod/<virt-controller>
+   ```
+
+## Mitigation
+
+This alert can have a variety of causes, including:
+
+- Not enough memory on the cluster
+- Nodes are down
+- The API server is overloaded. For example, the scheduler might be under a
+heavy load and therefore not completely available.
+- Networking issues
+
+Identify the root cause and fix it, if possible.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\LowVirtOperatorCount.md -->
+<!-- ========================================== -->
+
+# LowVirtOperatorCount
+
+## Meaning
+
+This alert fires when only one `virt-operator` pod in a `Ready` state has been
+running for the last 60 minutes.
+
+The `virt-operator` is the first Operator to start in a cluster. Its primary
+responsibilities include the following:
+
+- Installing, live-updating, and live-upgrading a cluster
+- Monitoring the lifecycle of top-level controllers, such as `virt-controller`,
+`virt-handler`, `virt-launcher`, and managing their reconciliation
+- Certain cluster-wide tasks, such as certificate rotation and infrastructure
+management
+
+## Impact
+
+The `virt-operator` cannot provide high availability (HA) for the deployment. HA
+requires two or more `virt-operator` pods in a `Ready` state. The default
+deployment is two pods.
+
+The `virt-operator` is not directly responsible for virtual machines (VMs) in
+the cluster. Therefore, its decreased availability does not significantly affect
+VM workloads.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the states of the `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-operator
+   ```
+
+3. Review the logs of the affected `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE logs <virt-operator>
+   ```
+
+4. Obtain the details of the affected `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pod <virt-operator>
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NetworkAddonsConfigNotReady.md -->
+<!-- ========================================== -->
+
+# NetworkAddonsConfigNotReady
+
+## Meaning
+
+This alert fires when the `NetworkAddonsConfig` custom resource (CR) of the
+Cluster Network Addons Operator (CNAO) is not ready.
+
+CNAO deploys additional networking components on the cluster. This alert
+indicates that one of the deployed components is not ready.
+
+## Impact
+
+Network functionality is affected.
+
+## Diagnosis
+
+1. Check the status conditions of the `NetworkAddonsConfig` CR to identify the
+deployment or daemon set that is not ready:
+
+   ```bash
+   $ oc get networkaddonsconfig -o custom-columns=':.status.conditions[*].message' | tr -d '\n'
+   ```
+
+   Example output:
+
+   ```text
+   DaemonSet "openshift-cnv/macvtap-cni" update is being processed...
+   ```
+
+2. Check the component's pod for errors:
+
+   ```bash
+   $ oc -n openshift-cnv get daemonset <daemonset> -o yaml
+   ```
+
+3. Check the component's logs:
+
+   ```bash
+   $ oc -n openshift-cnv logs <pod>
+   ```
+
+4. Check the component's details for error conditions:
+
+   ```bash
+   $ oc -n openshift-cnv describe pod <pod>
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NoLeadingVirtOperator.md -->
+<!-- ========================================== -->
+
+# NoLeadingVirtOperator
+
+## Meaning
+
+This alert fires when no `virt-operator` pod with a leader lease has been
+detected for 10 minutes, although the `virt-operator` pods are in a `Ready`
+state. The alert indicates that no leader pod is available.
+
+The `virt-operator` is the first Operator to start in a cluster. Its primary
+responsibilities include the following:
+
+- Installing, live updating, and live upgrading a cluster
+
+- Monitoring the lifecycle of top-level controllers, such as `virt-controller`,
+`virt-handler`, `virt-launcher`, and managing their reconciliation
+
+- Certain cluster-wide tasks, such as certificate rotation and infrastructure
+management
+
+The `virt-operator` deployment has a default replica of 2 pods, with one pod
+holding a leader lease.
+
+## Impact
+
+This alert indicates a failure at the level of the cluster. As a result,
+critical cluster-wide management functionalities, such as certification
+rotation, upgrade, and reconciliation of controllers, might not be available.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Obtain the status of the `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-operator
+   ```
+
+3. Check the `virt-operator` pod logs to determine the leader status:
+
+   ```bash
+   $ oc -n $NAMESPACE logs | grep lead
+   ```
+
+   Leader pod example:
+
+   ```text
+   {"component":"virt-operator","level":"info","msg":"Attempting to acquire leader status","pos":"application.go:400","timestamp":"2021-11-30T12:15:18.635387Z"}
+   I1130 12:15:18.635452       1 leaderelection.go:243] attempting to acquire leader lease <namespace>/virt-operator...
+   I1130 12:15:19.216582       1 leaderelection.go:253] successfully acquired lease <namespace>/virt-operator
+   {"component":"virt-operator","level":"info","msg":"Started leading","pos":"application.go:385","timestamp":"2021-11-30T12:15:19.216836Z"}
+   ```
+
+   Non-leader pod example:
+
+   ```text
+   {"component":"virt-operator","level":"info","msg":"Attempting to acquire leader status","pos":"application.go:400","timestamp":"2021-11-30T12:15:20.533696Z"}
+   I1130 12:15:20.533792       1 leaderelection.go:243] attempting to acquire leader lease <namespace>/virt-operator...
+   ```
+
+4. Obtain the details of the affected `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pod <virt-operator>
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NoReadyVirtAPI.md -->
+<!-- ========================================== -->
+
+# NoReadyVirtAPI
+
+## Meaning
+
+This alert fires when no `virt-api` pod in a `Ready` state has been detected
+for 10 minutes.
+
+The `virt-api` serves the OpenShift Virtualization API.
+Without a ready `virt-api`, API requests for virtual machines
+and other KubeVirt resources cannot be served.
+
+## Impact
+
+KubeVirt API is effectively unavailable. Users and controllers cannot perform
+API operations such as creating, updating, or deleting virtual machine
+instances (VMIs) or other KubeVirt resources.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-api` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-api
+   ```
+
+3. Check the `virt-api` deployment and events:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-api
+   ```
+
+4. Review logs of any `virt-api` pod that is running but not ready:
+
+   ```bash
+   $ oc -n $NAMESPACE logs <virt-api-pod-name> --previous
+   $ oc -n $NAMESPACE logs <virt-api-pod-name>
+   ```
+
+5. Check for node issues:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Identify the root cause (e.g. all replicas crashing, readiness probe failures,
+node or resource issues) and restore at least one ready `virt-api` pod.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NoReadyVirtController.md -->
+<!-- ========================================== -->
+
+# NoReadyVirtController
+
+## Meaning
+
+This alert fires when no available `virt-controller` devices have been detected
+for 5 minutes.
+
+The `virt-controller` devices monitor the custom resource definitions of virtual
+machine instances (VMIs) and manage the associated pods. The devices create pods
+for VMIs and manage the lifecycle of the pods.
+
+Therefore, `virt-controller` devices are critical for all cluster-wide
+virtualization functionality.
+
+## Impact
+Any actions related to VM lifecycle management fail. This notably includes
+launching a new VMI or shutting down an existing VMI.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Verify the number of `virt-controller` devices:
+
+   ```bash
+   $ oc get deployment -n $NAMESPACE virt-controller -o jsonpath='{.status.readyReplicas}'
+   ```
+
+3. Check the status of the `virt-controller` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-controller -o yaml
+   ```
+
+4. Obtain the details of the `virt-controller` deployment to check for status
+conditions such as crashing pods or failure to pull images:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-controller
+   ```
+
+5. Obtain the details of the `virt-controller` pods:
+
+   ```bash
+   $ get pods -n $NAMESPACE | grep virt-controller
+   ```
+
+6. Check the logs of the `virt-controller` pods for error messages:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-controller>
+   ```
+
+7. Check the nodes for problems, suchs as a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NoReadyVirtHandler.md -->
+<!-- ========================================== -->
+
+# NoReadyVirtHandler
+
+## Meaning
+
+This alert fires when no `virt-handler` pod in a `Ready` state has been
+detected for 10 minutes.
+
+The `virt-handler` runs on every node that can schedule VMIs (as a
+DaemonSet). It is responsible for domain lifecycle and node-level operations
+for virtual machine instances.
+
+## Impact
+
+No node has a ready `virt-handler`. Virtual machine instances cannot be
+properly managed: domain updates, migrations, and node-level operations will
+fail or be delayed until at least one `virt-handler` becomes ready.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-handler` DaemonSet and pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get daemonset virt-handler
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-handler -o wide
+   ```
+
+3. Check DaemonSet and pod events:
+
+   ```bash
+   $ oc -n $NAMESPACE describe daemonset virt-handler
+   $ oc -n $NAMESPACE describe pod -l kubevirt.io=virt-handler
+   ```
+
+4. Review logs of any running but not ready `virt-handler` pod:
+
+   ```bash
+   $ oc -n $NAMESPACE logs <virt-handler-pod-name> --previous
+   $ oc -n $NAMESPACE logs <virt-handler-pod-name>
+   ```
+
+5. Check for cluster-wide node or scheduling issues:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Identify the root cause (e.g. DaemonSet not scheduling, all pods crashing or
+failing readiness, node or image issues) and restore at least one ready
+`virt-handler` pod on a schedulable node.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NoReadyVirtOperator.md -->
+<!-- ========================================== -->
+
+# NoReadyVirtOperator
+
+## Meaning
+
+This alert fires when no `virt-operator` pod in a `Ready` state has been
+detected for 10 minutes.
+
+The `virt-operator` is the first Operator to start in a cluster. Its primary
+responsibilities include the following:
+
+- Installing, live-updating, and live-upgrading a cluster
+- Monitoring the life cycle of top-level controllers, such as `virt-controller`,
+`virt-handler`, `virt-launcher`, and managing their reconciliation
+- Certain cluster-wide tasks, such as certificate rotation and infrastructure
+management
+
+The default deployment is two `virt-operator` pods.
+
+## Impact
+
+This alert indicates a cluster-level failure. Critical cluster management
+functionalities, such as certification rotation, upgrade, and reconciliation of
+controllers, might not be not available.
+
+The `virt-operator` is not directly responsible for virtual machines in the
+cluster. Therefore, its temporary unavailability does not significantly affect
+custom workloads.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Obtain the name of the `virt-operator` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-operator -o yaml
+   ```
+
+3. Generate the description of the `virt-operator` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-operator
+   ```
+
+4. Check for node issues, such as a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\NodeNetworkInterfaceDown.md -->
+<!-- ========================================== -->
+
+# NodeNetworkInterfaceDown
+
+## Meaning
+
+This alert fires when one or more network interfaces on a node have been down
+for more than 5 minutes. The alert excludes virtual ethernet (veth) devices and
+bridge tunnels.
+
+## Impact
+
+Network interface failures can lead to:
+- Reduced network connectivity for pods on the affected node
+- Potential service disruptions if critical network paths are affected
+- Degraded cluster communication if management interfaces are impacted
+
+## Diagnosis
+
+1. Identify the affected node and interfaces:
+   ```bash
+   oc get nodes
+   ```
+
+   ```bash
+   ssh <node-address>
+   ```
+
+   ```bash
+   ip link show | grep -i down
+   ```
+
+2. Check network interface details:
+   ```bash
+   ip addr show
+   ```
+
+   ```bash
+   ethtool <interface-name>
+   ```
+
+3. Review system logs for network-related issues:
+   ```bash
+   journalctl -u NetworkManager
+   ```
+
+   ```bash
+   dmesg | grep -i eth
+   ```
+
+## Mitigation
+
+1. For physical interface issues:
+   - Check physical cable connections
+   - Verify switch port configuration
+   - Test the interface with a different cable/port
+
+2. For software or configuration issues:
+
+   [OCPV:NodeNetworkInterfaceDown alert for unused network
+interfaces](https://access.redhat.com/solutions/7123315)
+
+3. If the issue persists:
+   - Check network interface configuration files
+   - Verify driver compatibility
+   - If the failure is on a physical interface, consider hardware replacement
+
+## Additional notes
+- Monitor interface status after mitigation
+- Document any hardware replacements or configuration changes
+- Consider implementing network redundancy for critical interfaces
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\OperatorConditionsUnhealthy.md -->
+<!-- ========================================== -->
+
+# OperatorConditionsUnhealthy [Deprecated]
+
+This alert is deprecated. You can safely ignore or silence it.
+y resources
+are in an error or warning state.
+
+## Impact
+
+Resources maintained by the operator might not be functioning correctly.
+
+## Diagnosis
+
+Check the operator conditions:
+
+```bash
+oc get <CR> <CR_OBJECT> -n <namespace> -o jsonpath='{.status.conditions}'
+```
+
+For example:
+
+```bash
+oc get HyperConverged kubevirt-hyperconverged -n kubevirt -o jsonpath='{.status.conditions}'
+```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause within the operator or any of its secondary resources,
+and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\OrphanedVirtualMachineInstances.md -->
+<!-- ========================================== -->
+
+# OrphanedVirtualMachineInstances
+
+## Meaning
+
+This alert fires when a virtual machine instance (VMI), or `virt-launcher` pod,
+runs on a node that does not have a running `virt-handler` pod. Such a VMI is
+called _orphaned_.
+
+## Impact
+
+Orphaned VMIs cannot be managed.
+
+## Diagnosis
+
+1. Check the status of the `virt-handler` pods to view the nodes on which they
+are running:
+
+   ```bash
+   $ oc get pods --all-namespaces -o wide -l kubevirt.io=virt-handler
+   ```
+
+2. Check the status of the VMIs to identify VMIs running on nodes that do not
+have a running `virt-handler` pod:
+
+   ```bash
+   $ oc get vmis --all-namespaces
+   ```
+
+3. Check the status of the `virt-handler` daemon:
+
+   ```bash
+   $ oc get daemonset virt-handler --all-namespaces
+   ```
+
+   Example output:
+
+   ```text
+   NAME                  DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE
+   virt-handler          2         2         2       2            2           kubernetes.io/os=linux   4h
+   ```
+
+   The daemon set is considered healthy if the `Desired`, `Ready`, and
+   `Available` columns contain the same value.
+
+4. If the `virt-handler` daemon set is not healthy, check the `virt-handler`
+daemon set for pod deployment issues:
+
+   ```bash
+   $ oc get daemonset virt-handler --all-namespaces -o yaml | jq .status
+   ```
+
+5. Check the nodes for issues such as a `NotReady` status:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+6. Check the `spec.workloads` stanza of the `KubeVirt` custom resource (CR) for
+a workloads placement policy:
+
+   ```bash
+   $ oc get kubevirt kubevirt --all-namespaces -o yaml
+   ```
+
+## Mitigation
+
+If a workloads placement policy is configured, add the node with the VMI to the
+policy.
+
+Possible causes for the removal of a `virt-handler` pod from a node include
+changes to the node's taints and tolerations or to a pod's scheduling rules.
+
+Try to identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\OutdatedVirtualMachineInstanceWorkloads.md -->
+<!-- ========================================== -->
+
+# OutdatedVirtualMachineInstanceWorkloads
+
+## Meaning
+
+This alert fires when running virtual machine instances (VMIs) in outdated
+`virt-launcher` pods are detected 24 hours after the OpenShift Virtualization
+control plane has
+been updated.
+
+## Impact
+
+Outdated VMIs might not have access to new OpenShift Virtualization features.
+
+Outdated VMIs will not receive the security fixes associated with the
+`virt-launcher` pod update.
+
+## Diagnosis
+
+1. Identify the outdated VMIs:
+
+   ```bash
+   $ oc get vmi -l kubevirt.io/outdatedLauncherImage --all-namespaces
+   ```
+
+2. Check the `KubeVirt` custom resource (CR) to determine whether
+`workloadUpdateMethods` is configured in the `workloadUpdateStrategy` stanza:
+
+   ```bash
+   $ oc get kubevirt --all-namespaces -o yaml
+   ```
+
+3. Check each outdated VMI to determine whether it is live-migratable:
+
+   ```bash
+   $ oc get vmi <vmi> -o yaml
+   ```
+
+   Example output:
+
+   ```yaml
+   apiVersion: kubevirt.io/v1
+   kind: VirtualMachineInstance
+   ...
+     status:
+       conditions:
+       - lastProbeTime: null
+         lastTransitionTime: null
+         message: cannot migrate VMI which does not use masquerade to connect to the pod network
+         reason: InterfaceNotLiveMigratable
+         status: "False"
+         type: LiveMigratable
+   ```
+
+## Mitigation
+
+### Configuring automated workload updates
+
+Update the `HyperConverged` CR to enable automatic workload updates.
+
+### Stopping a VM associated with a non-live-migratable VMI
+
+If a VMI is not live-migratable and if `runStrategy: always` is set in the
+corresponding `VirtualMachine` object, you can update the VMI by manually
+stopping the virtual machine (VM):
+
+  ```bash
+  $ virtctl stop --namespace <namespace> <vm>
+  ```
+
+A new VMI spins up immediately in an updated `virt-launcher` pod to replace the
+stopped VMI. This is the equivalent of a restart action.
+
+Note: Manually stopping a _live-migratable_ VM is destructive and not
+recommended because it interrupts the workload.
+
+### Migrating a live-migratable VMI
+
+If a VMI is live-migratable, you can update it by creating a
+`VirtualMachineInstanceMigration` object that targets a specific running VMI.
+The VMI is migrated into an updated `virt-launcher` pod.
+
+1. Create a `VirtualMachineInstanceMigration` manifest and save it as
+`migration.yaml`:
+
+   ```yaml
+   apiVersion: kubevirt.io/v1
+   kind: VirtualMachineInstanceMigration
+   metadata:
+     name: <migration_name>
+     namespace: <namespace>
+   spec:
+     vmiName: <vmi_name>
+   ```
+
+2. Create a `VirtualMachineInstanceMigration` object to trigger the migration:
+
+   ```bash
+   $ oc create -f migration.yaml
+   ```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\PersistentVolumeFillingUp.md -->
+<!-- ========================================== -->
+
+<!--
+Original source from KubePersistentVolumeFillingUp
+
+https://github.com/prometheus-operator/runbooks/blob/main/content/runbooks/kubernetes/KubePersistentVolumeFillingUp.md
+-->
+
+# PersistentVolumeFillingUp
+
+## Meaning
+
+A persistent volume associated with your cluster has crossed the warning
+threshold of 90% used capacity and is expected to fill up within 4 days.
+
+## Impact
+
+Service degradation, switching to read-only mode.
+
+## Diagnosis
+
+- Check the persistent volume claim (PVC) usage from within a pod that mounts
+the
+PVC. You can use the *exec* command to check the mounted filesystem in a pod:
+
+```shell
+$ oc exec -it <pod-name> -n <namespace> -- df -h /path/to/mount
+```
+
+- Check if services are enabled that might use large amounts of storage.
+For example, these might include snapshots or automatic data retention.
+
+## Mitigation
+
+### Data retention
+
+Deleting data that you no longer need is the fastest and the cheapest solution.
+
+Ask the service owner to delete specific sets of old data.
+
+### Data export
+
+If data is not needed in the service but needs to be processed later,
+move it to a different storage resource, like an S3 bucket.
+
+### Data rebalance in the cluster
+
+Some services automatically rebalance data on the cluster when a node fills up.
+Some of these services make it possible to rebalance data across existing
+nodes, others might require adding new nodes. If your cluster supports data
+rebalancing, increase the number of replicas and wait for data migration, or
+trigger the migration manually.
+
+Example services that support data rebalancing:
+
+- cassandra
+- ceph
+- elasticsearch/opensearch
+- gluster
+- hadoop
+- kafka
+- minio
+
+**Note**: Some services may require special scaling conditions for data
+rebalancing, such as doubling the number of active nodes.
+
+### Direct volume resizing
+
+If volume resizing is available, you can increase the capacity of the volume:
+
+1. Check that volume expansion is available by running the following command,
+replacing `<my-namespace>` and `<my-pvc>` with your namespace and PVC values:
+
+   ```shell
+   $ oc get storageclass `oc -n <my-namespace> get pvc <my-pvc> -ojson | jq -r '.spec.storageClassName'`
+   NAME                 PROVISIONER            RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION   AGE
+   standard (default)   kubernetes.io/gce-pd   Delete          Immediate           true                   28d
+   ```
+
+   This example displays  `ALLOWVOLUMEEXPANSION` as `true`, which means you can
+   use volume resizing.
+
+2. Resize the volume:
+   ```shell
+   $ oc -n <my-namespace> edit pvc <my-pvc>
+   ```
+
+3. Edit the `.spec.resources.requests.storage` to use the required storage size.
+If this succeeds, the PVC status will state "Waiting for user to (re-)start a
+pod to finish file system resize of volume on node."
+
+4. Verify that the setting has been changed accordingly:
+    ```shell
+    $ oc -n <my-namespace> get pvc <my-pvc>
+    ```
+
+5. When prompted by the PVC status, restart the respective pod. The following
+command automatically finds the pod that mounts the PVC and deletes it. However,
+if you know the pod name, you can also directly delete that pod:
+
+   ```shell
+   $ oc -n <my-namespace> delete pod `oc -n <my-namespace> get pod -ojson | jq -r '.items[] | select(.spec.volumes[] .persistentVolumeClaim.claimName=="<my-pvc>") | .metadata.name'`
+   ```
+
+### Migrate data to a new, larger volume
+
+If resizing is not available and the data is not safe to delete, the best
+solution is to create a larger volume and migrate the data.
+
+### Purge the volume
+
+If the data is ephemeral and volume expansion is not available, it may be best
+to purge the volume.
+
+**WARNING**: This will permanently delete the data on the volume.
+
+### Migrate data to a new, larger instance pool in the same cluster
+
+In very specific scenarios, it is better to schedule data migration in the same
+cluster, but to a new instance. This may be difficult to accomplish due to how
+certain resources are managed in OpenShift Container Platform.
+
+To migrate the data to a new instance pool in the same cluster:
+
+1. Add new nodes with greater capacity than the existing cluster.
+2. Trigger data migration.
+3. Scale the original instance pool to 0, and then delete it.
+
+### Migrate data to a new, larger cluster
+
+This is the most common scenario to resolve persistent volumes filling up.
+However, it is significantly more expensive and may be time-consuming.
+Migrating to a new cluster might also cause split-brain issues.
+
+To migrate data to a new, larger cluster:
+
+1. Create a data snapshot on the existing cluster.
+2. Add a new cluster with greater capacity than the existing cluster.
+3. Start a data restore operation on the new cluster based on the snapshot.
+4. Switch the old cluster to read-only mode.
+5. Reconfigure networking to point to the new cluster.
+6. Trigger data migration from the old cluster to the new cluster to sync the
+differences between the snapshot and the latest writes.
+7. Remove the old cluster.
+
+### Support
+
+If you cannot resolve the issue, log in to the
+[Red Hat Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SSPCommonTemplatesModificationReverted.md -->
+<!-- ========================================== -->
+
+# SSPCommonTemplatesModificationReverted
+
+## Meaning
+
+This alert fires when the Scheduling, Scale, and Performance (SSP) Operator
+reverts changes to common templates as part of its reconciliation procedure.
+
+The SSP Operator deploys and reconciles the common templates and the Template
+Validator. If a user or script changes a common template, the changes are
+reverted by the SSP Operator.
+
+## Impact
+
+Changes to common templates are overwritten.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get deployment -A | grep ssp-operator | awk '{print $1}')"
+   ```
+
+2. Check the `ssp-operator` logs for templates with reverted changes:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l control-plane=ssp-operator | grep 'common template' -C 3
+   ```
+
+## Mitigation
+
+Try to identify and resolve the cause of the changes.
+
+Ensure that changes are made only to copies of templates, and not to the
+templates themselves.
+
+<!-- No downstream link. Modules cannot contain xrefs.-->
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SSPDown.md -->
+<!-- ========================================== -->
+
+# SSPDown
+
+## Meaning
+
+This alert fires when all the Scheduling, Scale and Performance (SSP) Operator
+pods are down.
+
+The SSP Operator is responsible for deploying and reconciling the common
+templates and the Template Validator.
+
+## Impact
+
+Dependent components might not be deployed. Changes in the components might not
+be reconciled. As a result, the common templates and/or the Template Validator
+might not be updated or reset if they fail.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get deployment -A | grep ssp-operator | awk '{print $1}')"
+   ```
+
+2. Check the status of the `ssp-operator` pods.
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l control-plane=ssp-operator
+   ```
+
+3. Obtain the details of the `ssp-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pods -l control-plane=ssp-operator
+   ```
+
+4. Check the `ssp-operator` logs for error messages:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l control-plane=ssp-operator
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SSPFailingToReconcile.md -->
+<!-- ========================================== -->
+
+# SSPFailingToReconcile
+
+## Meaning
+
+This alert fires when the reconcile cycle of the Scheduling, Scale and
+Performance (SSP) Operator fails repeatedly, although the SSP Operator is
+running.
+
+The SSP Operator is responsible for deploying and reconciling the common
+templates and the Template Validator.
+
+## Impact
+
+Dependent components might not be deployed. Changes in the components might not
+be reconciled. As a result, the common templates and/or the Template Validator
+might not be updated or reset if they fail.
+
+## Diagnosis
+
+1. Export the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get deployment -A | grep ssp-operator | awk '{print $1}')"
+   ```
+
+2. Obtain the details of the `ssp-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pods -l control-plane=ssp-operator
+   ```
+
+3. Check the `ssp-operator` logs for errors:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l control-plane=ssp-operator
+   ```
+
+4. Obtain the status of the `virt-template-validator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l name=virt-template-validator
+   ```
+
+5. Obtain the details of the `virt-template-validator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pods -l name=virt-template-validator
+   ```
+
+6. Check the `virt-template-validator` logs for errors:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l name=virt-template-validator
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SSPHighRateRejectedVms.md -->
+<!-- ========================================== -->
+
+# SSPHighRateRejectedVms
+
+## Meaning
+
+This alert fires when a user or script attempts to create or modify a large
+number of virtual machines (VMs), using an invalid configuration.
+
+## Impact
+
+The VMs are not created or modified. As a result, the environment might not
+behave as expected.
+
+## Diagnosis
+
+1. Export the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get deployment -A | grep ssp-operator | awk '{print $1}')"
+   ```
+
+2. Check the `virt-template-validator` logs for errors that might indicate the
+cause:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l name=virt-template-validator
+   ```
+
+   Example output:
+
+   ```text
+   {"component":"kubevirt-template-validator","level":"info","msg":"evalution
+   summary for ubuntu-3166wmdbbfkroku0:\nminimal-required-memory applied: FAIL,
+   value 1073741824 is lower than minimum [2147483648]\n\nsucceeded=false",
+   "pos":"admission.go:25","timestamp":"2021-09-28T17:59:10.934470Z"}
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SSPOperatorDown.md -->
+<!-- ========================================== -->
+
+# SSPOperatorDown [Deprecated]
+
+This alert runbook has been deprecated; since it is a duplicate of the SSPDown
+alert runbook.
+
+## Meaning
+
+This alert fires when all the Scheduling, Scale and Performance (SSP) Operator
+pods are down.
+
+The SSP Operator is responsible for deploying and reconciling the common
+templates and the Template Validator.
+
+## Impact
+
+Dependent components might not be deployed. Changes in the components might not
+be reconciled. As a result, the common templates and/or the Template Validator
+might not be updated or reset if they fail.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get deployment -A | grep ssp-operator | awk '{print $1}')"
+   ```
+
+2. Check the status of the `ssp-operator` pods.
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l control-plane=ssp-operator
+   ```
+
+3. Obtain the details of the `ssp-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pods -l control-plane=ssp-operator
+   ```
+
+4. Check the `ssp-operator` logs for error messages:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l control-plane=ssp-operator
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+**Note:** Starting from 4.14, this runbook will no longer be supported. For a
+supported runbook, please see [SSPDown
+Runbook](http://kubevirt.io/monitoring/runbooks/SSPDown.html).
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SSPTemplateValidatorDown.md -->
+<!-- ========================================== -->
+
+# SSPTemplateValidatorDown
+
+## Meaning
+
+This alert fires when all the Template Validator pods are down.
+
+The Template Validator checks virtual machines (VMs) to ensure that they do not
+violate their templates.
+
+## Impact
+
+VMs are not validated against their templates. As a result, VMs might be created
+with specifications that do not match their respective workloads.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get deployment -A | grep ssp-operator | awk '{print $1}')"
+   ```
+
+2. Obtain the status of the `virt-template-validator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l name=virt-template-validator
+   ```
+
+3. Obtain the details of the `virt-template-validator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pods -l name=virt-template-validator
+   ```
+
+4. Check the  `virt-template-validator` logs for error messages:
+
+   ```bash
+   $ oc -n $NAMESPACE logs --tail=-1 -l name=virt-template-validator
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\SingleStackIPv6Unsupported.md -->
+<!-- ========================================== -->
+
+# SingleStackIPv6Unsupported [Deprecated]
+
+This alert is deprecated. You can safely ignore or silence it.
+
+
+## Meaning
+
+This alert fires when user tries to install OpenShift Virtualization on a single
+stack IPv6 cluster.
+
+OpenShift Virtualization is not yet supported on an OpenShift cluster configured
+with single stack IPv6. It's progress is being tracked on [this
+issue](https://issues.redhat.com/browse/CNV-28924).
+
+## Impact
+
+OpenShift Virtualization Operator can't be installed on a single stack IPv6
+cluster, and hence creation virtual machines on top of such a cluster is not
+possible.
+
+## Diagnosis
+
+- Check the cluster network configuration by running the following command:
+  ```shell
+  $ oc get network.config cluster -o yaml
+  ```
+  The output displays only an IPv6 CIDR for the cluster network.
+
+  Example output:
+  ```text
+  apiVersion: config.openshift.io/v1
+  kind: Network
+  metadata:
+    name: cluster
+  spec:
+    clusterNetwork:
+    - cidr: fd02::/48
+      hostPrefix: 64
+  ```
+
+## Mitigation
+
+It is recommended to use single stack IPv4 or a dual stack IPv4/IPv6 networking
+to use OpenShift Virtualization .Refer the
+[documentation](https://docs.openshift.com/container-platform/latest/networking/ovn_kubernetes_network_provider/converting-to-dual-stack.html).
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\UnsupportedHCOModification.md -->
+<!-- ========================================== -->
+
+# UnsupportedHCOModification
+
+## Meaning
+
+This alert fires when a JSON Patch annotation is used to change an operand of
+the HyperConverged Cluster Operator (HCO).
+
+HCO configures OpenShift Virtualization and its supporting operators in an
+opinionated way and
+overwrites its operands when there is an unexpected change to them. Users must
+not modify the operands directly.
+
+However, if a change is required and it is not supported by the HCO API, you can
+force HCO to set a change in an operator by using JSON Patch annotations. These
+changes are not reverted by HCO during its reconciliation process.
+
+## Impact
+
+Incorrect use of JSON Patch annotations might lead to unexpected results or an
+unstable environment.
+
+Upgrading a system with JSON Patch annotations is dangerous because the
+structure of the component custom resources might change.
+
+## Diagnosis
+
+Check the `annotation_name` in the alert details to identify the JSON Patch
+annotation:
+
+  ```text
+  Labels
+    alertname=UnsupportedHCOModification
+    annotation_name=kubevirt.kubevirt.io/jsonpatch
+    severity=info
+  ```
+
+To locate and review JSON Patch annotations on the `HyperConverged` resource:
+
+  ```bash
+  # Discover the HCO namespace (commonly 'openshift-cnv' or 'kubevirt-hyperconverged')
+  NS=$(oc get hyperconverged -A -o jsonpath='{.items[0].metadata.namespace}')
+
+  # Show annotations on the HyperConverged CR
+  oc get hyperconverged -n "${NS}" kubevirt-hyperconverged \
+    -o jsonpath='{.metadata.annotations}'; echo
+  ```
+
+When reviewing the annotations:
+- The jsonpatch annotation keys are fixed and live on the `HyperConverged` CR:
+  - `kubevirt.kubevirt.io/jsonpatch`
+  - `containerizeddataimporter.kubevirt.io/jsonpatch`
+  - `networkaddonsconfigs.kubevirt.io/jsonpatch`
+  - `ssp.kubevirt.io/jsonpatch`
+- Annotations that don't include the word `jsonpatch` are normal
+  OpenShift Virtualization annotations and are unrelated to this alert.
+
+## Mitigation
+
+It is best to use the HCO API to change an operand. However, if the change can
+only be done with a JSON Patch annotation, proceed with caution.
+
+Remove JSON Patch annotations before upgrade to avoid potential issues.
+
+To remove a specific JSON Patch annotation from the `HyperConverged` CR:
+
+  ```bash
+  # Example: remove the KubeVirt jsonpatch annotation key
+  oc annotate hyperconverged -n "${NS}" kubevirt-hyperconverged \
+    'kubevirt.kubevirt.io/jsonpatch-'
+
+  # Other examples (use if those annotations are present):
+  # Remove CDI jsonpatch
+  # oc annotate hyperconverged -n "${NS}" kubevirt-hyperconverged 'containerizeddataimporter.kubevirt.io/jsonpatch-'
+  # Remove CNAO jsonpatch
+  # oc annotate hyperconverged -n "${NS}" kubevirt-hyperconverged 'networkaddonsconfigs.kubevirt.io/jsonpatch-'
+  # Remove SSP jsonpatch
+  # oc annotate hyperconverged -n "${NS}" kubevirt-hyperconverged 'ssp.kubevirt.io/jsonpatch-'
+  ```
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VMCannotBeEvicted.md -->
+<!-- ========================================== -->
+
+# VMCannotBeEvicted
+
+## Meaning
+
+This alert fires when the eviction strategy of a virtual machine (VM) is set to
+`LiveMigration` but the VM is not migratable.
+
+## Impact
+
+Non-migratable VMs prevent node eviction. This condition affects operations such
+as node drain and updates.
+
+## Diagnosis
+
+1. Check the VMI configuration to determine whether the value of
+`evictionStrategy` is `LiveMigrate` of the VMI:
+
+   ```bash
+   $ oc get vmis -o yaml
+   ```
+
+2. Check for a `False` status in the `LIVE-MIGRATABLE` column to identify VMIs
+that are not migratable:
+
+   ```bash
+   $ oc get vmis -o wide
+   ```
+
+3. Obtain the details of the VMI and check `spec.conditions` to identify the
+issue:
+
+   ```bash
+   $ oc get vmi <vmi> -o yaml
+   ```
+
+   Example output:
+
+   ```yaml
+   status:
+     conditions:
+     - lastProbeTime: null
+       lastTransitionTime: null
+       message: cannot migrate VMI which does not use masquerade to connect to the pod network
+       reason: InterfaceNotLiveMigratable
+       status: "False"
+       type: LiveMigratable
+   ```
+
+## Mitigation
+
+Set the `evictionStrategy` of the VMI to `shutdown` or resolve the issue that
+prevents the VMI from migrating.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VMStorageClassWarning.md -->
+<!-- ========================================== -->
+
+# VMStorageClassWarning
+
+## Meaning
+
+When running VMs using ODF storage with 'rbd' mounter or 'rbd.csi.ceph.com'
+provisioner, Windows VMs may cause reports of bad crc/signature errors due to
+certain I/O patterns. Cluster performance can be severely degraded if the number
+of re-transmissions due to crc errors causes network saturation. 'krbd:rxbounce'
+should be configured for the VM storage class to prevent these crc errors, the
+"ocs-storagecluster-ceph-rbd-virtualization" storage class uses this option by
+default, if available.
+
+## Impact
+
+Cluster may report a huge number of CRC errors and the cluster might experience
+major service outages.
+
+## Diagnosis
+
+Obtain a list of VirtualMachines with an incorrectly configured storage class by
+running the following PromQL query:
+
+**Note:** You can use the Openshift metrics explorer available at
+'https://{OPENSHIFT_BASE_URL}/monitoring/query-browser'.
+
+```promql
+$ kubevirt_ssp_vm_rbd_block_volume_without_rxbounce == 1
+```
+
+Example output:
+
+```plaintext
+kubevirt_ssp_vm_rbd_block_volume_without_rxbounce{name="testvmi-gwgdqp22k7", namespace="test_ns_1"} 1
+kubevirt_ssp_vm_rbd_block_volume_without_rxbounce{name="testvmi-rjqbjg47a8", namespace="test_ns_2"} 1
+```
+
+The output displays a list of VirtualMachines that use a storage class without
+`rxbounce_enabled`.
+
+Obtain the VM volumes by running the following command:
+
+```bash
+$ oc get vm <vm-name> -o json | jq -r '.spec.template.spec.volumes[] | if .dataVolume then "DataVolume - " + .dataVolume.name elif .persistentVolumeClaim then "PersistentVolumeClaim - " + .persistentVolumeClaim.claimName else empty end'
+```
+
+## Mitigation
+
+It is recommended to create a dedicated StorageClass with "krbd:rxbounce" map
+option for the disks of virtual machines, to use a bounce buffer when receiving
+data. The default behavior is to read directly into the destination buffer. A
+bounce buffer is required if the stability of the destination buffer cannot be
+guaranteed.
+
+Note that changing the used storage class will not have any impact on existing
+PVCs/VMs, meaning that new VMs will be provisioned with the optimized settings
+but existing VMs need to be transitioned or the alert will continue to fire for
+those.
+
+```bash
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vm-sc
+parameters:
+  # ...
+  mounter: rbd
+  mapOptions: "krbd:rxbounce"
+provisioner: openshift-storage.rbd.csi.ceph.com
+# ...
+```
+
+See [Optimizing ODF PersistentVolumes for Windows VMs](https://access.redhat.com/articles/6978371)
+for details.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtAPIDown.md -->
+<!-- ========================================== -->
+
+# VirtAPIDown
+
+## Meaning
+
+No running `virt-api` pod has been detected for 10 minutes.
+
+## Impact
+
+OpenShift Virtualization objects cannot send API calls.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-api` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-api
+   ```
+
+3. Check the status of the `virt-api` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-api -o yaml
+   ```
+
+4. Check the `virt-api` deployment details for issues such as crashing pods or
+image pull failures:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-api
+   ```
+
+5. Check for issues such as nodes in a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Try to identify the root cause and resolve the issue.
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtApiRESTErrorsBurst.md -->
+<!-- ========================================== -->
+
+# VirtApiRESTErrorsBurst
+
+## Meaning
+
+For the last 10 minutes or longer, over 80% of the REST calls made to `virt-api`
+pods have failed.
+
+## Impact
+
+A very high rate of failed REST calls to `virt-api` might lead to slow response
+and execution of API calls, and potentially to API calls being completely
+dismissed.
+
+However, currently running virtual machine workloads are not likely to be
+affected.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Obtain the list of `virt-api` pods on your deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-api
+   ```
+
+3. Check the `virt-api` logs for error messages:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-api>
+   ```
+
+4. Obtain the details of the `virt-api` pods:
+
+   ```bash
+   $ oc describe -n $NAMESPACE <virt-api>
+   ```
+
+5. Check if any problems occurred with the nodes. For example, they might be in
+a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+6. Check the status of the `virt-api` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-api -o yaml
+   ```
+
+7. Obtain the details of the `virt-api` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-api
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtApiRESTErrorsHigh.md -->
+<!-- ========================================== -->
+
+# VirtApiRESTErrorsHigh [Deprecated]
+
+This alert has been deprecated; it does not indicate a genuine issue. If
+triggered, it may be safely ignored and silenced.
+
+## Meaning
+
+More than 5% of REST calls have failed in the `virt-api` pods in the last 60
+minutes.
+
+## Impact
+
+A high rate of failed REST calls to `virt-api` might lead to slow response and
+execution of API calls.
+
+However, currently running virtual machine workloads are not likely to be
+affected.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable as follows:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-api` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-api
+   ```
+
+3. Check the `virt-api` logs:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-api>
+   ```
+
+4. Obtain the details of the `virt-api` pods:
+
+   ```bash
+   $ oc describe -n $NAMESPACE <virt-api>
+   ```
+
+5. Check if any problems occurred with the nodes. For example, they might be in
+a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+6. Check the status of the `virt-api` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-api -o yaml
+   ```
+
+7. Obtain the details of the `virt-api` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-api
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtControllerDown.md -->
+<!-- ========================================== -->
+
+# VirtControllerDown
+
+## Meaning
+No running `virt-controller` pod has been detected for 10 minutes.
+
+## Impact
+Any actions related to virtual machine (VM) lifecycle management fail. This
+notably includes launching a new virtual machine instance (VMI) or shutting down
+an existing VMI.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-controller` deployment:
+
+   ```bash
+   $ oc get deployment -n $NAMESPACE virt-controller -o yaml
+   ```
+
+3. Review the logs of the `virt-controller` pod:
+
+   ```bash
+   $ oc get logs <virt-controller>
+   ```
+
+## Mitigation
+
+This alert can have a variety of causes, including the following:
+
+- Node resource exhaustion
+- Not enough memory on the cluster
+- Nodes are down
+- The API server is overloaded. For example, the scheduler might be under a
+heavy load and therefore not completely available.
+- Networking issues
+
+Identify the root cause and fix it, if possible.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtControllerRESTErrorsBurst.md -->
+<!-- ========================================== -->
+
+# VirtControllerRESTErrorsBurst
+
+## Meaning
+
+For the last 10 minutes or longer, over 80% of the REST calls made to
+`virt-controller` pods have failed.
+
+The `virt-controller` has likely fully lost the connection to the API server.
+
+This error is frequently caused by one of the following problems:
+
+- The API server is overloaded, which causes timeouts. To verify if this is the
+case, check the metrics of the API server, and view its response times and
+overall calls.
+
+- The `virt-controller` pod cannot reach the API server. This is commonly caused
+by DNS issues on the node and networking connectivity issues.
+
+## Impact
+
+Status updates are not propagated and actions like migrations cannot take place.
+However, running workloads are not impacted.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. List the available `virt-controller` pods:
+
+   ```bash
+   $ oc get pods -n $NAMESPACE -l=kubevirt.io=virt-controller
+   ```
+
+3. Check the `virt-controller` logs for error messages when connecting to the
+API server:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-controller>
+   ```
+
+## Mitigation
+
+- If the `virt-controller` pod cannot connect to the API server, delete the pod
+to force a restart:
+
+  ```bash
+  $ oc delete -n $NAMESPACE <virt-controller>
+  ```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtControllerRESTErrorsHigh.md -->
+<!-- ========================================== -->
+
+# VirtControllerRESTErrorsHigh [Deprecated]
+
+This alert has been deprecated; it does not indicate a genuine issue. If
+triggered, it may be safely ignored and silenced.
+
+## Meaning
+
+More than 5% of REST calls failed in `virt-controller` in the last 60 minutes.
+
+This is most likely because `virt-controller` has partially lost connection to
+the API server.
+
+This error is frequently caused by one of the following problems:
+
+- The API server is overloaded, which causes timeouts. To verify if this is the
+case, check the metrics of the API server, and view its response times and
+overall calls.
+
+- The `virt-controller` pod cannot reach the API server. This is commonly caused
+by DNS issues on the node and networking connectivity issues.
+
+## Impact
+
+Node-related actions, such as starting and migrating, and scheduling virtual
+machines, are delayed. Running workloads are not affected, but reporting their
+current status might be delayed.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. List the available `virt-controller` pods:
+
+   ```bash
+   $ oc get pods -n $NAMESPACE -l=kubevirt.io=virt-controller
+   ```
+
+3. Check the `virt-controller` logs for error messages when connecting to the
+API server:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-controller>
+   ```
+
+## Mitigation
+
+- If the `virt-controller` pod cannot connect to the API server, delete the pod
+to force a restart:
+
+  ```bash
+  $ oc delete -n $NAMESPACE <virt-controller>
+  ```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtHandlerDaemonSetRolloutFailing.md -->
+<!-- ========================================== -->
+
+# VirtHandlerDaemonSetRolloutFailing
+
+## Meaning
+
+The `virt-handler` daemon set has failed to deploy on one or more worker nodes
+after 15 minutes.
+
+## Impact
+
+This alert is a warning. It does not indicate that all `virt-handler` daemon
+sets have failed to deploy. Therefore, the normal lifecycle of virtual machines
+is not affected unless the cluster is overloaded.
+
+## Diagnosis
+
+Identify worker nodes that do not have a running `virt-handler` pod:
+
+1. Export the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o jsonpath='{.items[].metadata.namespace}')"
+   ```
+
+2. Check the status of the `virt-handler` pods to identify pods that have not
+deployed:
+
+   ```bash
+   $ oc get pods -n $NAMESPACE -l=kubevirt.io=virt-handler
+   ```
+
+3. Obtain the name of the worker node of the `virt-handler` pod:
+
+   ```bash
+   $ oc -n $NAMESPACE get pod <virt-handler> -o jsonpath='{.spec.nodeName}'
+   ```
+
+## Mitigation
+
+If the `virt-handler` pods failed to deploy because of insufficient resources,
+you can delete other pods on the affected worker node.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtHandlerDown.md -->
+<!-- ========================================== -->
+
+# VirtHandlerDown
+
+## Meaning
+
+No running `virt-handler` pod has been detected for 10 minutes..
+
+The `virt-handler` runs on every node that can schedule VMIs. It is
+responsible for domain lifecycle, network configuration, and other
+node-level operations for virtual machine instances.
+
+## Impact
+
+Virtual machine instances (VMIs) on affected nodes cannot be managed properly.
+New VMIs may not start on nodes without a running `virt-handler`, and
+existing VMIs may not receive updates or clean shutdowns.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-handler` DaemonSet and pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get daemonset virt-handler -o yaml
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-handler
+   ```
+
+3. Check DaemonSet events and pod status:
+
+   ```bash
+   $ oc -n $NAMESPACE describe daemonset virt-handler
+   $ oc -n $NAMESPACE describe pod -l kubevirt.io=virt-handler
+   ```
+
+4. Check for node issues (e.g. nodes not ready or taints):
+
+   ```bash
+   $ oc get nodes
+   ```
+
+5. If any `virt-handler` pod exists, review its logs:
+
+   ```bash
+   $ oc -n $NAMESPACE logs <virt-handler-pod-name> --previous
+   $ oc -n $NAMESPACE logs <virt-handler-pod-name>
+   ```
+
+## Mitigation
+
+Identify why `virt-handler` pods are down (e.g. DaemonSet not scheduling, pods
+crashing, node issues, image pull failures) and restore the DaemonSet so
+`virt-handler` runs on schedulable nodes.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtHandlerRESTErrorsBurst.md -->
+<!-- ========================================== -->
+
+# VirtHandlerRESTErrorsBurst
+
+## Meaning
+
+For the last 10 minutes or longer, over 80% of the REST calls made to
+`virt-handler` pods have failed.
+
+This alert usually indicates that the `virt-handler` pods cannot connect to the
+API server.
+
+This error is frequently caused by one of the following problems:
+
+- The API server is overloaded, which causes timeouts. To verify if this is the
+case, check the metrics of the API server, and view its response times and
+overall calls.
+
+- The `virt-handler` pod cannot reach the API server. This is commonly caused by
+DNS issues on the node and networking connectivity issues.
+
+## Impact
+
+Status updates are not propagated and node-related actions, such as migrations,
+fail. However, running workloads on the affected node are not impacted.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-handler` pod:
+
+   ```bash
+   $ oc get pods -n $NAMESPACE -l=kubevirt.io=virt-handler
+   ```
+
+3. Check the `virt-handler` logs for error messages when connecting to the API
+server:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-handler>
+   ```
+
+## Mitigation
+
+- If the `virt-handler` cannot connect to the API server, delete the pod to
+force a restart:
+
+  ```bash
+  $ oc delete -n $NAMESPACE <virt-handler>
+  ```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtHandlerRESTErrorsHigh.md -->
+<!-- ========================================== -->
+
+# VirtHandlerRESTErrorsHigh [Deprecated]
+
+This alert has been deprecated; it does not indicate a genuine issue. If
+triggered, it may be safely ignored and silenced.
+
+## Meaning
+
+More than 5% of REST calls failed in `virt-handler` in the last 60 minutes. This
+alert usually indicates that the `virt-handler` pods have partially lost
+connection to the API server.
+
+This error is frequently caused by one of the following problems:
+
+- The API server is overloaded, which causes timeouts. To verify if this is the
+case, check the metrics of the API server, and view its response times and
+overall calls.
+
+- The `virt-handler` pod cannot reach the API server. This is commonly caused by
+DNS issues on the node and networking connectivity issues.
+
+## Impact
+
+Node-related actions, such as starting and migrating workloads, are delayed on
+the node that `virt-handler` is running on. Running workloads are not affected,
+but reporting their current status might be delayed.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. List the available `virt-handler` pods to identify the failing `virt-handler`
+pod:
+
+   ```bash
+   $ oc get pods -n $NAMESPACE -l=kubevirt.io=virt-handler
+   ```
+
+3. Check the failing `virt-handler` pod log for error messages when connecting
+to the API server:
+
+   ```bash
+   $ oc logs -n $NAMESPACE <virt-handler>
+   ```
+
+   Example error message:
+
+   ```json
+   {"component":"virt-handler","level":"error","msg":"Can't patch node my-node","pos":"heartbeat.go:96","reason":"the server has received too many API requests and has asked us to try again later","timestamp":"2023-11-06T11:11:41.099883Z","uid":"132c50c2-8d82-4e49-8857-dc737adcd6cc"}
+   ```
+
+## Mitigation
+
+If the `virt-handler` cannot connect to the API server, delete the pod to force
+a restart:
+
+```bash
+$ oc delete -n $NAMESPACE <virt-handler>
+```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtLauncherPodsStuckFailed.md -->
+<!-- ========================================== -->
+
+# VirtLauncherPodsStuckFailed
+
+## Meaning
+
+A large number of virt-launcher Pods remain in the `Failed` phase.
+
+Condition: `cluster:kubevirt_virt_launcher_failed:count >= 200` appears for 10
+minutes.
+Virt-launcher Pods host virtual machine (VM) workloads and mass failures can
+indicate
+migration loops, image/network/storage issues, or control-plane regressions.
+
+## Impact
+
+VMs and the cluster control plane might be affected:
+
+- API server and etcd pressure (large object lists/watches, increased latency)
+- Controller and scheduler slowdown (reconciliation over huge Pod sets)
+- Monitoring cardinality spikes (kube-state-metrics and Prometheus load)
+- Operational churn (re-creation loops, CNI and storage attach/detach)
+- Triage noise and SLO risk (timeouts on list operations, noisy dashboards)
+
+## Diagnosis
+
+1. Confirm scope and distribution:
+    ```promql
+    cluster:kubevirt_virt_launcher_failed:count
+    ```
+    ```promql
+    count by (namespace) (kube_pod_status_phase{phase="Failed", pod=~"virt-launcher-.*"} == 1)
+    ```
+    ```promql
+    count by (node) (
+      (kube_pod_status_phase{phase="Failed", pod=~"virt-launcher-.*"} == 1)
+      * on(pod) group_left(node) kube_pod_info{pod=~"virt-launcher-.*", node!=""}
+    )
+    ```
+    ```promql
+    topk(5, count by (reason) (kube_pod_container_status_last_terminated_reason{pod=~"virt-launcher-.*"} == 1))
+    ```
+
+2. Sample failed Pods and events:
+    ```bash
+    # List a few failed virt-launcher pods cluster-wide
+    $ oc get pods -A -l kubevirt.io=virt-launcher --field-selector=status.phase=Failed --no-headers | head -n 20
+    ```
+    ```bash
+    # Inspect events for a representative pod (image/CNI/storage/useful errors)
+    $ oc -n <namespace> describe pod <virt-launcher-pod> | sed -n '/Events/,$p'
+    ```
+
+3. Check for migration storms:
+    ```bash
+    $ oc get vmim -A
+    ```
+
+4. In the control plane and component logs, look for spikes/errors:
+    ```bash
+    NAMESPACE="$(oc get kubevirt -A -o jsonpath='{.items[0].metadata.namespace}')"
+    ```
+    ```bash
+    $ oc -n "$NAMESPACE" logs -l kubevirt.io=virt-controller --tail=200
+    ```
+    ```bash
+    $ oc -n "$NAMESPACE" logs -l kubevirt.io=virt-handler --tail=200
+    ```
+
+5. Check the infrastructure for common causes:
+
+- Image pulls: registry reachability/credentials; `ImagePullBackOff` events
+- Network: CNI errors/timeouts in Pod events and node logs
+- Storage: volume attach/mount errors in Pod events and CSI logs
+
+## Mitigation
+
+1. Reduce the blast radius:
+
+    - Migration loop: cancel in-flight migrations (scope as needed).
+      ```bash
+      $ oc delete vmim -A
+      ```
+
+    - Coordinate with noisy tenants; pause offending workloads if necessary.
+
+2. Clean up failed Pods (relieves API/etcd and monitoring):
+
+    ```bash
+    $ oc get pods -A -l kubevirt.io=virt-launcher --field-selector=status.phase=Failed -o name | xargs -r -n50 oc delete
+    ```
+
+3. Resolve root cause:
+
+    - Image issues: fix registry access, credentials, or tags; re-run affected
+workloads.
+    - Network/CNI: fix CNI/data-plane errors; confirm new Pods start cleanly.
+    - Storage: resolve attach/mount failures; verify PVC/VolumeSnapshot health.
+    - OpenShift Virtualization regression: roll forward/back to a known-good
+version and re-try.
+
+4. Validate resolution (alert clears):
+    ```promql
+    cluster:kubevirt_virt_launcher_failed:count
+    ```
+
+Ensure the failed count drops and stays below threshold and that new
+virt-launcher
+Pods start successfully and VMIs are healthy.
+
+If you cannot resolve the issue, log in to the [Red Hat Customer
+Portal](link:https://access.redhat.com)
+and open a support case, attaching the artifacts gathered during the diagnosis
+procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtOperatorDown.md -->
+<!-- ========================================== -->
+
+# VirtOperatorDown
+
+## Meaning
+
+This alert fires when no `virt-operator` pod in the `Running` state has been
+detected for 10 minutes.
+
+The `virt-operator` is the first Operator to start in a cluster. Its primary
+responsibilities include the following:
+
+- Installing, live-updating, and live-upgrading a cluster
+- Monitoring the life cycle of top-level controllers, such as `virt-controller`,
+`virt-handler`, `virt-launcher`, and managing their reconciliation
+- Certain cluster-wide tasks, such as certificate rotation and infrastructure
+management
+
+The `virt-operator` deployment has a default replica of 2 pods.
+
+## Impact
+
+This alert indicates a failure at the level of the cluster. Critical
+cluster-wide management functionalities, such as certification rotation,
+upgrade, and reconciliation of controllers, might not be available.
+
+The `virt-operator` is not directly responsible for virtual machines (VMs) in
+the cluster. Therefore, its temporary unavailability does not significantly
+affect VM workloads.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-operator` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE get deploy virt-operator -o yaml
+   ```
+
+3. Obtain the details of the `virt-operator` deployment:
+
+   ```bash
+   $ oc -n $NAMESPACE describe deploy virt-operator
+   ```
+
+4. Check the status of the `virt-operator` pods:
+
+   ```bash
+   $ oc get pods -n $NAMESPACE -l=kubevirt.io=virt-operator
+   ```
+
+5. Check for node issues, such as a `NotReady` state:
+
+   ```bash
+   $ oc get nodes
+   ```
+
+## Mitigation
+
+Based on the information obtained during the diagnosis procedure, try to
+identify the root cause and resolve the issue.
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtOperatorRESTErrorsBurst.md -->
+<!-- ========================================== -->
+
+# VirtOperatorRESTErrorsBurst
+
+## Meaning
+
+For the last 10 minutes or longer, over 80% of the REST calls made to
+`virt-operator` pods have failed.
+
+This usually indicates that the `virt-operator` pods cannot connect to the API
+server.
+
+This error is frequently caused by one of the following problems:
+
+- The API server is overloaded, which causes timeouts. To verify if this is the
+case, check the metrics of the API server, and view its response times and
+overall calls.
+
+- The `virt-operator` pod cannot reach the API server. This is commonly caused
+by DNS issues on the node and networking connectivity issues.
+
+## Impact
+
+Cluster-level actions, such as upgrading and controller reconciliation, might
+not be available.
+
+However, customer workloads, such as virtual machines (VMs) and VM instances
+(VMIs), are not likely to be affected.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-operator
+   ```
+
+3. Check the `virt-operator` logs for error messages when connecting to the API
+server:
+
+   ```bash
+   $ oc -n $NAMESPACE logs <virt-operator>
+   ```
+
+4. Obtain the details of the `virt-operator` pod:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pod <virt-operator>
+   ```
+
+## Mitigation
+
+- If the `virt-operator` pod cannot connect to the API server, delete the pod to
+force a restart:
+
+  ```bash
+  $ oc delete -n $NAMESPACE <virt-operator>
+  ```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtOperatorRESTErrorsHigh.md -->
+<!-- ========================================== -->
+
+# VirtOperatorRESTErrorsHigh [Deprecated]
+
+This alert has been deprecated; it does not indicate a genuine issue. If
+triggered, it may be safely ignored and silenced.
+
+## Meaning
+
+This alert fires when more than 5% of the REST calls in `virt-operator` pods
+failed in the last 60 minutes. This usually indicates the `virt-operator` pods
+cannot connect to the API server.
+
+This error is frequently caused by one of the following problems:
+
+- The API server is overloaded, which causes timeouts. To verify if this is the
+case, check the metrics of the API server, and view its response times and
+overall calls.
+
+- The `virt-operator` pod cannot reach the API server. This is commonly caused
+by DNS issues on the node and networking connectivity issues.
+
+## Impact
+
+Cluster-level actions, such as upgrading and controller reconciliation, might be
+delayed.
+
+However, customer workloads, such as virtual machines (VMs) and VM instances
+(VMIs), are not likely to be affected.
+
+## Diagnosis
+
+1. Set the `NAMESPACE` environment variable:
+
+   ```bash
+   $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+   ```
+
+2. Check the status of the `virt-operator` pods:
+
+   ```bash
+   $ oc -n $NAMESPACE get pods -l kubevirt.io=virt-operator
+   ```
+
+3. Check the `virt-operator` logs for error messages when connecting to the API
+server:
+
+   ```bash
+   $ oc -n $NAMESPACE logs <virt-operator>
+   ```
+
+4. Obtain the details of the `virt-operator` pod:
+
+   ```bash
+   $ oc -n $NAMESPACE describe pod <virt-operator>
+   ```
+
+## Mitigation
+
+- If the `virt-operator` pod cannot connect to the API server, delete the pod to
+force a restart:
+
+  ```bash
+  $ oc delete -n <install-namespace> <virt-operator>
+  ```
+
+If you cannot resolve the issue, log in to the
+[Customer Portal](https://access.redhat.com) and open a support case,
+attaching the artifacts gathered during the diagnosis procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtualMachineCRCErrors.md -->
+<!-- ========================================== -->
+
+# VirtualMachineCRCErrors [Deprecated]
+
+This alert is deprecated. You can safely ignore or silence it.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtualMachineInstanceHasEphemeralHotplugVolume.md -->
+<!-- ========================================== -->
+
+# VirtualMachineInstanceHasEphemeralHotplugVolume
+
+## Meaning
+
+The `VirtualMachineInstanceHasEphemeralHotplugVolume` alert is triggered when a
+virtual machine instance (VMI) contains an ephemeral hotplug volume. An
+ephemeral hotplug volume only exists in the VMI and does not persist when
+restarting a virtual machine (VM).
+
+## Impact
+
+The `HotplugVolumes` feature gate will be deprecated in a future release and
+will
+be replaced by the `DeclarativeHotplugVolumes` feature gate. The two are
+mutually
+exclusive, and when `DeclarativeHotplugVolumes` becomes enabled, any remaining
+ephemeral hotplug volumes will be automatically unplugged from all VMIs.
+
+This alert is triggered to inform users about the future deprecation and to
+suggest steps to convert ephermeral volumes to persistent ones.
+
+## Diagnosis
+
+1. Find each VM that contains an ephemeral hotplug volume.
+   This command returns a list with entries in the [vm-name, namespace] format.
+    ```bash
+    $ oc get vmis -A -o json | jq -r '.items[].metadata | select(.annotations | has("kubevirt.io/ephemeral-hotplug-volumes")) | [.name , .namespace] | @tsv'
+    ```
+2. For each VM listed, find the volumes that need to be patched.
+   ```bash
+   $ oc get vmis <vm-name> -n <namespace> -o json | jq -r '.metadata.annotations."kubevirt.io/ephemeral-hotplug-volumes"'
+   ```
+
+## Mitigation
+
+To mitigate the impact of this alert, consider converting the ephemeral
+hotplug volumes in the VM to persistent volumes instead.
+
+To convert ephemeral volumes to persistent volumes, run the following command:
+```bash
+$ virtctl addvolume <vm-name> --volume-name=<volume-name> --persist
+```
+
+If you cannot resolve the issue, log in to the [Red Hat Customer
+Portal](link:https://access.redhat.com)
+and open a support case, attaching the artifacts gathered during the diagnosis
+procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtualMachineStuckInUnhealthyState.md -->
+<!-- ========================================== -->
+
+# VirtualMachineStuckInUnhealthyState
+
+## Meaning
+
+This alert triggers when a virtual machine (VM) is in an unhealthy state
+for more than 10 minutes and does not have an associated VMI
+(VirtualMachineInstance).
+
+The alert indicates that a VM is experiencing early-stage lifecycle issues
+before a VMI can be successfully created. This typically occurs during the
+initial phases of VM startup when OpenShift Virtualization is trying to
+provision resources,
+pull images, or schedule the workload.
+
+**Affected states:**
+- `Provisioning` - The VM is preparing resources (DataVolumes, PVCs)
+- `Starting` - VM is attempting to start but no VMI exists yet
+- `Terminating` - VM is being deleted but without an active VMI
+- `Error` - Various scheduling, image, or resource allocation errors
+
+## Impact
+
+- **Severity:** Warning
+- **User impact:** VMs cannot start or are stuck in error states
+- **Business impact:** Workloads cannot be deployed, which affects application
+  availability
+
+## Possible causes
+
+### Resource-related issues
+- Insufficient cluster resources (CPU, memory, storage)
+- Missing or misconfigured storage classes
+- PVC provisioning failures
+- DataVolume creation/import failures
+
+### Image and registry issues
+- Container image pull failures for containerDisk volumes
+- Registry authentication problems
+- Network connectivity issues to image registries
+- Missing or corrupted VM disk images
+
+### Scheduling and node issues
+- No schedulable nodes available (all nodes cordoned/unschedulable)
+- Insufficient resources like KVM/GPU on available nodes
+- A mismatch between requested and available CPU models
+- Node selector constraints cannot be satisfied
+- Taints and tolerations preventing scheduling
+
+### Configuration issues
+- Invalid VM specifications (malformed YAML, unsupported features)
+- Missing required Secrets or ConfigMaps
+- Incorrect resource requests/limits
+- Network configuration errors
+
+## Diagnosis
+
+1. Check VM status and events
+    ```bash
+    # Get VM details and status
+    $ oc get vm <vm-name> -n <namespace> -o yaml
+
+    # Check VM events for error messages
+    $ oc describe vm <vm-name> -n <namespace>
+
+    # Look for related events in the namespace
+    $ oc get events -n <namespace> --sort-by='.lastTimestamp'
+    ```
+
+2. Verify resource availability
+    ```bash
+    # Check node resources and schedulability
+    $ oc get nodes -o wide
+    $ oc describe nodes
+
+    # Check storage classes and provisioners
+    $ oc get storageclass
+    $ oc get pv,pvc -n <namespace>
+
+    # For DataVolumes (if using)
+    $ oc get datavolume -n <namespace>
+    $ oc describe datavolume <dv-name> -n <namespace>
+    ```
+
+3. Check image availability (for containerDisk)
+    ```bash
+    # If using containerDisk, verify image accessibility from the affected node
+    # Start a debug session on the node hosting the VM (or a representative node)
+    $ oc debug node/<node-name> -it --image=busybox
+
+    # Inside the debug pod, check which container runtime is used
+    $ ps aux | grep -E "(containerd|dockerd|crio)"
+
+    # For CRI-O/containerd clusters use crictl to pull the image
+    $ crictl pull <vm-disk-image>
+
+    # For Docker-based clusters (less common)
+    $ docker pull <vm-disk-image>
+
+    # Exit the debug session when done
+    $ exit
+
+    # Check image pull secrets if required
+    $ oc get secrets -n <namespace>
+    ```
+
+4. Verify OpenShift Virtualization configuration
+    ```bash
+    # Discover the KubeVirt installation namespace
+    $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+
+    # Check KubeVirt CR conditions (expect Available=True)
+    $ oc get kubevirt -n "$NAMESPACE" \
+      -o jsonpath='{range .items[*].status.conditions[*]}{.type}={.status}{"\n"}{end}'
+
+    # Or check a single CR named 'kubevirt'
+    $ oc get kubevirt kubevirt -n "$NAMESPACE" \
+      -o jsonpath='{.status.conditions[?(@.type=="Available")].status}'
+
+    # Verify virt-controller is running
+    $ oc get pods -n "$NAMESPACE" \
+      -l kubevirt.io=virt-controller
+
+    # Check virt-controller logs for errors
+    # Replace <virt-controller-pod> with a pod name from the list above
+    $ oc logs -n "$NAMESPACE" <virt-controller-pod>
+
+    # Verify virt-handler is running
+    $ oc get pods -n "$NAMESPACE" \
+      -l kubevirt.io=virt-handler -o wide
+
+    # Check virt-handler logs for errors (daemonset uses per-node pods)
+    # Replace <virt-handler-pod> with a pod name from the list above
+    $ oc logs -n "$NAMESPACE" <virt-handler-pod>
+    ```
+
+5. Review VM specification
+Inspect the following details in the VM's spec to catch common
+misconfigurations:
+
+- Disks and volumes (in spec.template.spec.domain.devices and volumes):
+  - A bootable disk is defined using *bootOrder: 1*
+  - Each disk name matches a volume name
+  - Volume sources are valid: PVC, DataVolume, containerDisk, secret, or
+    configMap
+
+- Resources (in spec.template.spec.domain.resources):
+  - Resource requests and limits are set and do not exceed node capacity
+
+- Scheduling (in spec.template.spec):
+  - nodeSelector, affinity, and tolerations are not overly restrictive
+
+- Image pull configuration (in spec.template.spec.imagePullSecrets):
+  - imagePullSecrets are configured if using a private image registry
+
+- Power strategy (in spec.runStrategy or spec.running):
+  - Only one of spec.runStrategy or spec.running is set, and it matches the
+    desired behavior
+
+## Mitigation
+
+### Resource issues
+- **Scale up the cluster** if the issue is insufficient resources
+- **Create missing storage classes** or configure default storage
+- **Resolve PVC/DataVolume failures**:
+   ```bash
+   $ oc get pvc -n <namespace>
+   $ oc describe pvc <pvc-name> -n <namespace>
+   ```
+
+### Image issues
+- **Verify image accessibility**:
+   ```bash
+   # Validate from the node
+   $ oc debug node/<node-name> -it --image=busybox
+
+   # Inside the debug pod, detect runtime and pull
+   $ ps aux | grep -E "(containerd|dockerd|crio)"
+
+   # For CRI-O/containerd clusters:
+   $ crictl pull <image-name>
+
+   # For Docker-based clusters (less common):
+   $ docker pull <image-name>
+
+   $ exit
+   ```
+- **Configure image pull secrets** if needed:
+   ```bash
+   $ oc create secret docker-registry <secret-name> \
+     --docker-server=<registry-url> \
+     --docker-username=<username> \
+     --docker-password=<password>
+   ```
+
+### Scheduling issues
+- **Review VM scheduling constraints** and relax if too restrictive:
+  - nodeSelector, affinity, and tolerations
+  - Required CPU model, host devices, or features
+
+- **Verify that node taints and tolerations** allow scheduling:
+  - Ensure the VM tolerates node taints that apply to target nodes
+
+- **Ensure that nodes have required capabilities**:
+  - KVM availability, CPU features, GPU, SR-IOV, or storage access
+
+- If nodes were intentionally cordoned for maintenance, **uncordon** when
+   appropriate:
+   ```bash
+   $ oc uncordon <node-name>
+   ```
+
+### Configuration issues resolution
+- **Fix VM specification errors** based on the *oc describe* output:
+   ```bash
+   # Edit VM specification directly
+   $ oc edit vm <vm-name> -n <namespace>
+
+   # Or patch specific fields
+   $ oc patch vm <vm-name> -n <namespace> --type='merge' \
+     -p='{"spec":{"template":{"spec":{"domain":{"resources": \
+       {"requests":{"memory":"2Gi"}}}}}}}'
+   ```
+- **Create missing secrets/configmaps**:
+   ```bash
+   $ oc create secret generic <secret-name> \
+     --from-literal=key=value
+   ```
+- **Adjust resource requests** if they exceed node capacity
+
+### Emergency workarounds
+- **Restart the VM** to apply specification changes:
+  ```bash
+  # Restart the VM to pick up spec changes
+  $ virtctl restart <vm-name> -n <namespace>
+  ```
+- **Scale down non-critical workloads** temporarily if resource
+  constraints exist
+- **Change storage class** if PVC provisioning fails:
+  ```bash
+  # Check current storage class status
+  $ oc get storageclass
+  $ oc describe storageclass <current-storage-class>
+
+  # Look for PVC provisioning errors
+  $ oc describe pvc <pvc-name> -n <namespace>
+
+  # If seeing "no volume provisioner" or similar errors,
+  # specify a working storage class in VM spec:
+  # spec.dataVolumeTemplates[].spec.pvc.storageClassName:
+  #   <working-class>
+  ```
+
+## Prevention
+
+- **Resource planning:**
+  - Monitor cluster resource utilization
+  - Set appropriate VM guest resources in the VM domain guest spec.
+  - Plan storage capacity and provisioning
+
+- **Image management:**
+  - Use local image registries where possible to reduce
+    latency
+  - Configure DataVolume import methods appropriately:
+    * **Pod import method**: Images pulled to temporary pods (default)
+    * **Node import method**: Images pulled directly to nodes
+      (requires pre-pulling)
+  - Pre-pull critical containerDisk images to nodes only if
+    using node import method
+
+- **Monitoring:**
+  - Set up alerts for cluster resource exhaustion
+  - Monitor storage provisioner health
+  - Track VM startup success rates
+
+- **Testing:**
+  - Validate VM templates in development environments
+  - Test VM deployments after cluster changes
+  - Regularly verify image accessibility
+
+## Escalation
+
+Escalate to the cluster administrator if:
+- Multiple VMs are affected simultaneously (possible cluster-wide issue)
+- Issue persists after following resolution steps
+- A malfunction of OpenShift Virtualization components is suspected
+- You are unable to access system logs for further diagnosis
+- You do not have enough permissions to run the diagnosis or mitigation steps
+
+## Related alerts
+
+- `VirtControllerDown` - May indicate controller issues preventing
+  VM processing
+- `LowKVMNodesCount` - Related to insufficient KVM-capable nodes
+- `KubeVirtNoAvailableNodesToRunVMs` - Indicates no nodes available
+  for VM scheduling
+
+If you cannot resolve the issue, log in to the
+[Red Hat Customer Portal](https://access.redhat.com) and open a support
+case, attaching the artifacts gathered during the diagnosis
+procedure.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\openshift-virtualization-operator\VirtualMachineStuckOnNode.md -->
+<!-- ========================================== -->
+
+# VirtualMachineStuckOnNode
+
+## Meaning
+
+This alert triggers when a virtual machine (VM) with an associated
+VirtualMachineInstance (VMI) has been stuck in an unhealthy state for more than
+5 minutes on a specific node.
+
+The alert indicates that the VM has progressed past initial scheduling and has
+an active VMI, but is experiencing runtime issues on the assigned node. This
+typically occurs after the VM has been scheduled to a node but encounters
+problems during the startup, operation, or shutdown phases.
+
+**Affected states:**
+- `Starting` - VMI exists but VM is failing to reach running state
+- `Stopping` - VM is attempting to stop but the process is stuck
+- `Terminating` - VM is being deleted but the termination process is hanging
+- `Error` - Runtime errors are occurring on the node (ErrImagePull,
+  ImagePullBackOff, etc.)
+
+## Impact
+
+- **Severity:** Warning
+- **User impact:** VMs are unresponsive or stuck in transition states
+- **Business impact:** Running workloads might be disrupted, which affects
+application performance and availability
+- **Node Impact:** Resources may be tied up by unresponsive VMs, which affects
+other workloads on the same node
+
+## Possible Causes
+
+### Node-level issues
+- **Node resource exhaustion** (CPU, memory, storage)
+- **Container runtime problems** (issues with containerd or CRI-O)
+- **Insufficient storage** on the node
+- **Network connectivity issues** from the node
+- **Node entering the NotReady state** or maintenance mode
+
+### QEMU/KVM issues
+- **QEMU process failures** or hangs
+- **KVM acceleration problems** on the node
+- **Nested virtualization** configuration issues
+- **Hardware compatibility** problems
+
+### Image and storage issues
+- **Container image pull failures** specific to the node
+- **Local image cache corruption**
+- **PVC mount failures** on the node
+- **Storage backend connectivity** issues from the node
+- **Volume attachment timeouts**
+
+### virt-launcher pod issues
+- **virt-launcher pod** stuck in non-ready state
+- **Pod resource limits** being exceeded
+- **Security policy violations** (SELinux, AppArmor)
+- **Networking problems** within the pod
+
+### libvirt/domain issues
+- **libvirt daemon** problems on the node
+- **Domain definition** conflicts or corruption
+- **Migration failures** (if VM was being migrated)
+- **Hot-plug operations** that failed and left VM in inconsistent
+  state
+
+## Diagnosis
+
+1. Check VM and VMI status:
+    ```bash
+    # Get VM details with node information
+    $ oc get vm <vm-name> -n <namespace> -o yaml
+
+    # Check VMI status and node assignment
+    $ oc get vmi <vm-name> -n <namespace> -o yaml
+    $ oc describe vmi <vm-name> -n <namespace>
+
+    # Look for related events
+    $ oc get events -n <namespace> \
+      --field-selector involvedObject.name=<vm-name>
+    ```
+
+2. Examine virt-launcher pod:
+    ```bash
+    # Find the virt-launcher pod for this VM
+    $ oc get pods -n <namespace> -l kubevirt.io/domain=<vm-name>
+
+    # Check pod status and events
+    $ oc describe pod <virt-launcher-pod> -n <namespace>
+
+    # Check pod logs for errors
+    $ oc logs <virt-launcher-pod> -n <namespace> -c compute
+    $ oc logs <virt-launcher-pod> -n <namespace> -c istio-proxy \
+      # if using Istio
+
+    # Optional: Check resource usage for the virt-launcher pod
+    $ oc top pod <virt-launcher-pod> -n <namespace>
+    ```
+
+3. Investigate node health:
+    ```bash
+    # Check node status and conditions (may require admin
+    # permissions)
+    $ oc describe node <node-name>
+
+    # Discover the KubeVirt installation namespace
+    $ export NAMESPACE="$(oc get kubevirt -A -o custom-columns="":.metadata.namespace)"
+
+    # Check virt-handler on the affected node
+    $ oc get pods -n "$NAMESPACE" -o wide | grep <node-name>
+    $ oc logs <virt-handler-pod> -n "$NAMESPACE"
+    ```
+
+4. Check storage and volumes:
+    ```bash
+    # Verify PVC status and mounting
+    $ oc get pvc -n <namespace>
+    $ oc describe pvc <pvc-name> -n <namespace>
+
+    # Check volume attachments on the node
+    $ oc get volumeattachment | grep <node-name>
+
+    # For DataVolumes, check their status
+    $ oc get dv -n <namespace>
+    $ oc describe dv <dv-name> -n <namespace>
+    ```
+
+5. Verify image accessibility from node:
+    ```bash
+    # Verify image accessibility from the affected node
+    $ oc debug node/<node-name> -it --image=busybox
+
+    # Inside the debug pod, check which container runtime is used
+    $ ps aux | grep -E "(containerd|dockerd|crio)"
+
+    # For CRI-O/containerd clusters:
+    $ crictl pull <vm-disk-image>
+
+    # For Docker-based clusters (less common):
+    $ docker pull <vm-disk-image>
+
+    # Exit the debug session when done
+    $ exit
+    ```
+
+6. Exec into the virt‑launcher pod’s compute container and inspect domains:
+    ```bash
+    $ oc exec -it <virt-launcher-pod> -n <namespace> -c compute \
+      -- virsh list --all | grep <vm-name>
+    $ oc exec -it <virt-launcher-pod> -n <namespace> -c compute \
+      -- virsh dumpxml <domain-name>
+    ```
+
+## Mitigation
+
+### Pod-Level Issues
+- **Restart the virt-launcher pod**:
+   ```bash
+   $ oc delete pod <virt-launcher-pod> -n <namespace>
+   # The VMI controller will recreate it
+   ```
+
+- **Check resource constraints**:
+   ```bash
+   $ oc describe pod <virt-launcher-pod> -n <namespace>
+   # Look for resource limit violations
+   ```
+
+### Image Issues on Node
+- **Inspect and, if necessary, clear image cache** on the node:
+   ```bash
+   # SSH to the node or start a debug session on the node:
+   $ oc debug node/<node-name> -it --image=busybox
+
+   # Detect which container runtime is in use
+   $ ps aux | grep -E "(containerd|dockerd|crio)"
+
+   # List cached images first
+   # For CRI-O/containerd clusters:
+   $ crictl images
+   # For Docker-based clusters:
+   $ docker images
+
+   # Remove only if a corrupted/stale image is suspected
+   # For CRI-O/containerd clusters:
+   $ crictl rmi <problematic-image>
+   # For Docker-based clusters:
+   $ docker rmi <problematic-image>
+
+   $ exit
+   ```
+
+- **Force image re-pull**:
+   ```bash
+   # Delete and recreate the virt-launcher pod
+   $ oc delete pod <virt-launcher-pod> -n <namespace>
+   ```
+
+### Storage Issues
+- **Check PVC binding and mounting**:
+   ```bash
+   $ oc get pvc -n <namespace>
+   # If PVC is stuck, check the storage provisioner
+   ```
+
+- **Resolve volume attachment issues**:
+   ```bash
+   $ oc get volumeattachment
+   # Delete stuck volume attachments if necessary
+   $ oc delete volumeattachment <attachment-name>
+   ```
+
+### Node-Level Issues Resolution
+- **Drain and uncordon the node** if it is in a bad state:
+   ```bash
+   $ oc drain <node-name> --ignore-daemonsets \
+     --delete-emptydir-data
+   $ oc uncordon <node-name>
+   ```
+
+- **Restart node-level components**:
+   ```bash
+   # Restart virt-handler on the node
+   $ oc delete pod <virt-handler-pod> -n "$NAMESPACE"
+   ```
+
+### VM-Level Resolution
+- **Force‑delete the VMI (triggers creating a new VMI)**:
+   ```bash
+   $ oc delete vmi <vm-name> -n <namespace> --force \
+     --grace-period=0
+   ```
+
+- **Migrate the VM to a different node**:
+   ```bash
+   $ virtctl migrate <vm-name> -n <namespace>
+   ```
+
+### Emergency Actions
+- **Live migrate** critical VMs away from the problematic node
+- **Force delete** the unresponsive VMI if it is safe to do so:
+  ```bash
+  $ oc delete vmi <vm-name> -n <namespace> --force --grace-period=0
+  ```
+- **Cordon the node** to prevent new VM scheduling while investigating
+
+## Prevention
+
+- **Node Health Monitoring:**
+  - Monitor node resource utilization (CPU, memory,
+    storage)
+  - Set up alerts for node conditions and taints
+  - Perform regular health checks on container runtime
+
+- **Resource Management:**
+  - Set appropriate resource requests/limits on VMs
+  - Monitor PVC and storage utilization
+  - Plan for node capacity and VM density
+
+- **Image Management:**
+  - Use image pull policies appropriately (Always,
+    IfNotPresent)
+  - Pre-pull critical images to nodes
+  - Monitor image registry health and connectivity
+
+- **Networking:**
+  - Ensure stable network connectivity between nodes and storage
+  - Monitor DNS resolution and service discovery
+  - Validate network policies do not block required traffic
+
+- **Regular Maintenance:**
+  - Keep nodes and OpenShift Virtualization components updated
+
+## Escalation
+
+Escalate to the cluster administrator if:
+- Multiple VMs are affected on the same node simultaneously
+- VMs consistently fail to start or become unresponsive after
+  following troubleshooting steps
+- Node‑specific issues persist (Like kubelet or kernel panic) and
+  require a node reboot
+- A malfunction of OpenShift Virtualization components is suspected
+- You are unable to access system logs for further diagnosis
+- You do not have enough permissions to run the diagnosis and/or mitigation
+  steps.
+
+## Related Alerts
+
+- `OrphanedVirtualMachineInstances` - May indicate virt-handler
+  problems on nodes
+- `VirtHandlerDown` - Related to virt-handler pod failures
+- `VirtualMachineStuckInUnhealthyState` - For VMs that haven't
+  progressed to having VMIs
+
+If you cannot resolve the issue, log in to the
+[Red Hat Custromer Portal](https://access.redhat.com) and open a support
+case, attaching the artifacts gathered during the diagnosis
+procedure.
+
+

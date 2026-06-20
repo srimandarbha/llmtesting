@@ -1,0 +1,4436 @@
+<!-- ========================================== -->
+<!-- Source Path: alerts\HighlyAvailableWorkloadIncorrectlySpread.md -->
+<!-- ========================================== -->
+
+# HighlyAvailableWorkloadIncorrectlySpread
+
+## Meaning
+
+Highly available workloads with persistent storage are incorrectly spread across
+multiple nodes. In high availability topology, all workloads with multiple
+replicas should be spread across multiple nodes to avoid having a single point
+of failure. However, workloads with persistent storage are more complex to
+schedule since persistent volumes may be bound to an availability zone, so they
+need to be spread manually before any scheduling constraints are put in place.
+
+## Impact
+
+The cluster isn't fully highly available since some workloads with persistent
+storage still have a single point of failure.
+
+## Diagnosis
+
+The alert indicates which workloads aren't correctly spread across multiple
+nodes. You can find information to identify them under the `workload` and
+`namespace` labels.
+
+```console
+ - alertname = HighlyAvailableWorkloadIncorrectlySpread
+...
+ - workload = prometheus-k8s
+...
+ - namespace = openshift-monitoring
+```
+
+Then you can verify that multiple instances of the same application are indeed
+scheduled on the same node by running:
+
+```console
+$ oc -n "$NS" get -o wide pods | grep "$WORKLOAD"
+```
+
+## Mitigation
+
+To mitigate this issue, you can follow the steps below, but first you should
+get the following information from the alert labels:
+* `workload`: workload name
+* `namespace`: namespace of the workload
+
+First, you need to get the name of the node hosting all the instances of your
+workload:
+
+```console
+$ NODE=$(oc -n "$NS" get pods -ojson | jq -r --arg WORKLOAD "$WORKLOAD" '.items[] | select(.metadata.name|test($WORKLOAD + ".*")) | .spec.nodeName' | head -n 1)
+```
+
+Now that you have the name of the node, you will have to cordon it to prevent
+pods from being rescheduled on this node:
+
+```console
+$ oc adm cordon "$NODE"
+```
+
+Then you will need to get the list of pods that should be rescheduled for the
+given workload and node:
+
+```console
+$ POD=$(oc -n "$NS" get -o wide pods | grep "$WORKLOAD.*$NODE" | cut -f1 -d ' ' | head -n 1)
+```
+
+If your storage system is bound to availability zones, you will also want to
+get the number of availability zones present on your cluster to know if you
+need to delete persistent volume claims:
+
+```console
+$ oc get nodes -o yaml | grep -E "^\s+failure-domain.beta.kubernetes.io/zone" | uniq | wc -l
+```
+
+Then for each pod, you will want to delete the pod and the PVC attached to it,
+if required by the previous step, in order to reschedule it on another node:
+
+> Note that deleting the PVC will result in data loss and the replication level
+will decrease, but this is a required step if you want your cluster to be
+highly available.
+
+```console
+$ PVC=$(oc get -n "$NS" pod "$POD" -ojson | jq -r '.spec.volumes[] | select(.persistentVolumeClaim!=null) | .persistentVolumeClaim.claimName')
+$ oc delete -n "$NS" pvc "$PVC"
+$ oc delete -n "$NS" pod "$POD"
+```
+
+Once all the pods are rescheduled, you can uncordon the node:
+
+```console
+$ oc adm uncordon "$NODE"
+```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\advanced-cluster-management-operator\ACMMetricsCollectorFederationError.md -->
+<!-- ========================================== -->
+
+# ACMMetricsCollectorFederationError
+
+## Meaning
+
+This alert fires when the ACM Metrics Collector, receives a high rate of non-2xx
+(e.g., 401 Unauthorized, 403 Forbidden, 5xx Server Error) responses while trying
+to federate (scrape) metrics from the cluster's internal Prometheus
+(`prometheus-k8s` in the `openshift-monitoring` namespace).
+
+The alert expression
+`(sum(rate(acm_metrics_collector_federate_requests_total{status_code!~"2.*"}[10m])))
+/ (sum(rate(acm_metrics_collector_federate_requests_total[10m]))) > 0.2`
+indicates that the rate of failed requests has exceeded 20% for the past 10
+minutes (600s).
+
+## Impact
+
+When this alert is firing, metrics from the cluster itself cannot be collected
+by the metric collector and sent to the observability stack on the Hub. This
+will cause metrics from the cluster where this alert is firing to be missing in
+the ACM Observability stack, causing the cluster not to be visible in Grafana
+dashboards.
+
+## Diagnosis
+
+### 1. Check the logs of the Metrics Collector pod
+
+The `metrics-collector-deployment` pod in the
+`open-cluster-management-observability` namespace is responsible for this
+scrape. Inspect its logs for specific errors:
+
+```console
+oc logs -f deployment/metrics-collector-deployment -n open-cluster-management-observability
+```
+
+Look for repeated HTTP 401/403 (Authorization) or 5xx (Server) errors.
+
+* **`i/o timeout` errors** indicate a network problem, not an authorization problem.
+
+* **401 Unauthorized or 403 Forbidden errors** indicate an RBAC problem.
+
+* **`the incoming sample data is too long` errors** indicates too much metric
+  data is being federated in a single request.
+
+### 2. Verify the ClusterRoleBinding for the collector
+
+The `metrics-collector-deployment` pod uses a `ServiceAccount` that requires
+permission to get metrics from the `openshift-monitoring` namespace. Verify this
+binding is correct.
+
+* Find the `ServiceAccount`:
+
+    ```console
+    $ oc get deployment metrics-collector-deployment -n open-cluster-management-observability -o jsonpath='{.spec.template.spec.serviceAccountName}'
+    endpoint-observability-operator-sa
+    ```
+
+* Find its `ClusterRoleBinding`:
+
+    ```console
+    $ oc get clusterrolebinding metrics-collector-view
+    NAME                     ROLE                            AGE
+    metrics-collector-view   ClusterRole/cluster-monitoring-view   ...
+    ```
+
+* Inspect the `ClusterRoleBinding`:
+
+    ```console
+    oc get clusterrolebinding metrics-collector-view -o yaml
+    ```
+
+* Ensure the `roleRef.name` is `cluster-monitoring-view` and the `subjects`
+  section correctly lists the `endpoint-observability-operator-sa`
+  `ServiceAccount` from the `open-cluster-management-observability` namespace.
+
+### 3. Check for NetworkPolicy blocking traffic
+
+If you see `i/o timeout` or connection refused errors, check for NetworkPolicies
+that might be blocking traffic:
+
+```console
+oc get networkpolicy -n open-cluster-management-observability
+oc get networkpolicy -n openshift-monitoring
+```
+
+Look for policies that might restrict egress from the metrics-collector pod or
+ingress to the prometheus-k8s service.
+
+## Mitigation
+
+Resolution involves restoring the `metrics-collector-deployment`'s ability to
+successfully authenticate and scrape metrics from the `openshift-monitoring`
+namespace.
+
+### 1. If the ClusterRoleBinding is missing or incorrect
+
+The `metrics-collector-view` `ClusterRoleBinding` is managed by the
+`multicluster-observability-operator`. If it has been deleted or modified, it
+will not be automatically recreated if the operator is paused or in a failed
+state.
+
+* Ensure the `multicluster-observability-operator` and
+  `multiclusterhub-operator` in the `open-cluster-management` namespace are
+  running.
+
+* If the binding is missing, you may need to force a reconciliation by
+  restarting the `multicluster-observability-operator` pod.
+
+* If the binding cannot be restored automatically, it can be reapplied from a
+  backup.
+
+### 2. If a NetworkPolicy is causing the issue
+
+If a custom `NetworkPolicy` was recently applied, it may be blocking the
+`metrics-collector-deployment` pod from reaching the `prometheus-k8s` service on
+port 9091 in the `openshift-monitoring` namespace.
+
+* Remove or modify the `NetworkPolicy` to allow this traffic.
+
+### 3. If openshift-monitoring components are failing
+
+If the collector logs show 5xx errors, the problem may be with Prometheus
+itself.
+
+* Check the health of the `prometheus-k8s` pods in the `openshift-monitoring`
+  namespace:
+
+    ```console
+    oc get pods -n openshift-monitoring -l app.kubernetes.io/name=prometheus
+    ```
+
+* Check the logs of the `kube-rbac-proxy` container within the `prometheus-k8s`
+  pods, as it may be failing its own authentication checks against the Kube API
+  server:
+
+    ```console
+    oc logs -n openshift-monitoring prometheus-k8s-0 -c kube-rbac-proxy
+    ```
+
+You should see successful scrape operations with no 403 errors. The alert will
+clear after 10+ minutes of successful federation.
+
+### 4. If the incoming metric request is too large
+
+If the collector is trying to federate too many metrics in a single request you
+can increase the number of workers used. This will make the metric-collector
+split up federate requests between multiple workers.
+
+* To increase the metrics collection workers on all clusters, edit the workers
+  parameter in the multicluster-observability-operator resource on the Hub:
+
+    ```console
+    spec:
+        observabilityAddonSpec:
+            enableMetrics: true
+            workers: 4
+    ```
+
+**Expected resolution time**: Alert should clear within 10-15 minutes after RBAC
+permissions are restored and successful scraping resumes.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\advanced-cluster-management-operator\ACMMetricsCollectorForwardRemoteWriteError.md -->
+<!-- ========================================== -->
+
+# ACMMetricsCollectorForwardRemoteWriteError
+
+## Meaning
+
+This alert fires when the ACM Metrics Collector fails to "remote write" its
+metrics to the central Thanos Hub (`observability-observatorium-api`) service.
+
+The alert query
+`(sum(rate(acm_metrics_collector_forward_write_requests_total{status_code!~"2.*"}[10m])))
+/ (sum(rate(acm_metrics_collector_forward_write_requests_total[10m]))) > 0.2`
+means the alert triggers only when the collector receives a high rate of
+non-2xx (e.g., 401, 403, 503) HTTP status codes for more than 10 minutes.
+
+This alert will not fire for network-level failures like `i/o timeout` or `EOF`
+(connection dropped), as these do not produce an HTTP status code.
+
+## Impact
+
+When this alert is firing, metrics from the cluster itself are successfully
+collected but cannot be sent to the central Thanos storage. This will cause the
+Hub cluster to appear "dark" or "offline" in Grafana, and its health and
+performance metrics will be missing.
+
+**Time sensitivity**: This issue will cause metrics will be dropped, resulting
+in permanent data gaps.
+
+This can also negatively affect SLO/SLI calculations that rely on Hub cluster
+metrics.
+
+## Diagnosis
+
+The primary goal is to determine why the `metrics-collector-deployment` is
+receiving HTTP 4xx or 5xx errors.
+
+### 1. Check the logs of the Metrics Collector pod
+
+This is the most important step. The error message will tell you if the failure
+is a network error (like `EOF`) or an HTTP error (like 403).
+
+```console
+oc logs -f deployment/metrics-collector-deployment -n open-cluster-management-observability
+```
+
+### 2. Analyze the log error
+
+* **If the log shows `err="... EOF"` or `err="... i/o timeout"`**:
+
+    This is a network-level failure, which will not trigger this alert. This
+    means the `observability-observatorium-api` service is likely down. Check
+    that its pods are running:
+
+    ```console
+    oc get pods -n open-cluster-management-observability -l app.kubernetes.io/name=observatorium-api
+    ```
+
+    If no pods are Running, this is the root cause.
+
+* **If the log shows `err="... response status 401 Unauthorized"` or `err="...
+  403 Forbidden"`**:
+
+    This is an authentication error and will trigger the alert. This means the
+    `observability-observatorium-api` server is running but is actively
+    rejecting the collector's connection. This can be caused by:
+
+  * The metrics-collector's client certificate
+    (`observability-controller-open-cluster-management.io-observability-signer-client-cert`
+    secret) is invalid or has expired.
+  * The metrics-collector's `ServiceAccount` token is invalid or not
+    authorized.
+  * The `observability-observatorium-api` server's own mTLS configuration is
+    broken and is failing to validate the (valid) client.
+
+### 3. Inspect the client certificate
+
+Check if the certificate exists and when it expires:
+
+```console
+$ oc get secret observability-controller-open-cluster-management.io-observability-signer-client-cert \
+  -n open-cluster-management-observability -o jsonpath='{.data.tls\.crt}' | \
+  base64 -d | openssl x509 -noout -dates -subject
+```
+
+Look for the `notAfter` date to verify the certificate has not expired.
+
+## Mitigation
+
+The mitigation depends on the errors found in the diagnosis.
+
+### 1. If observability-observatorium-api pods are not running (causing EOF
+errors)
+
+The `observability-observatorium-api` deployment may have been scaled to 0.
+Scale the deployment back to its default replica count (usually 2).
+
+```console
+oc scale deployment observability-observatorium-api -n open-cluster-management-observability --replicas=2
+```
+
+### 2. If the collector is receiving 401/403 errors (the alert's trigger)
+
+This indicates an authentication failure. The `metrics-collector` authenticates
+with both a client certificate and a `ServiceAccount` token.
+
+* **Step 1**: Restart the `metrics-collector` pod. This will force it to reload
+  its certificates and token.
+
+    ```console
+    oc scale deployment metrics-collector-deployment -n open-cluster-management-observability --replicas=0
+    oc scale deployment metrics-collector-deployment -n open-cluster-management-observability --replicas=1
+    ```
+
+* **Step 2**: Restart the `observability-observatorium-api` pods. This will
+  force the server to reload its authentication configuration.
+
+    ```console
+    oc scale deployment observability-observatorium-api -n open-cluster-management-observability --replicas=0
+    oc scale deployment observability-observatorium-api -n open-cluster-management-observability --replicas=2
+    ```
+
+* **Step 3**: If errors persist, check the client certificate. The
+  `observability-controller-open-cluster-management.io-observability-signer-client-cert`
+  secret may be corrupted or expired. It is managed by the
+  `multicluster-observability-operator`. Check the operator logs for errors:
+
+    ```console
+    oc logs -n open-cluster-management deployment/multicluster-observability-operator
+    ```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\advanced-cluster-management-operator\ACMRemoteWriteError.md -->
+<!-- ========================================== -->
+
+# ACMRemoteWriteError
+
+## Meaning
+
+This alert fires when the `observability-observatorium-api` service (on the Hub
+cluster) fails to send metrics to a configured external Prometheus remote-write
+endpoint.
+
+The alert query `sum by (name)
+(rate(acm_remote_write_requests_total{code!~"2.*"}[10m])) / sum by (name)
+(rate(acm_remote_write_requests_total[10m])) > 0.2` means that the alert will
+fire if more than 20% of remote-write requests fail with a non-2xx HTTP status
+code (like 401 Unauthorized, 403 Forbidden, or 503 Service Unavailable) for a
+continuous 10-minute period.
+
+## Impact
+
+When this alert is firing, metrics from the ACM observability stack are not
+being successfully forwarded to the configured external monitoring system
+(e.g., a central Grafana, another Thanos instance, corporate monitoring
+platform, etc.).
+
+**What is affected:**
+
+* Metrics are not reaching the external system for centralized monitoring,
+  alerting, or compliance reporting.
+* Any dashboards, alerts, or SLI/SLO calculations in the external system that
+  depend on ACM metrics will be incomplete or showing stale data.
+
+**What is NOT affected:**
+
+* Local ACM observability remains functional - you can still view metrics in
+  the Hub cluster's Grafana.
+* Metric collection from managed clusters continues normally.
+* Data is still being stored in the local Thanos storage.
+
+This does not affect the local ACM observability (you can still view metrics in
+the Hub cluster's Grafana). However, it signifies a broken integration and a
+loss of data on the external system.
+
+## Diagnosis
+
+The primary goal is to determine why the `observability-observatorium-api` pod
+is receiving HTTP errors from the external endpoint.
+
+### 1. Check the logs of the observability-observatorium-api pods
+
+This is the most important step. The logs will show the exact error code and
+the failing URL.
+
+```console
+oc logs -f deployment/observability-observatorium-api -n open-cluster-management-observability
+```
+
+Look for error messages like `level=error ... msg="failed to forward metrics"
+returncode="503 Service Temporarily Unavailable"`.
+
+### 2. Inspect the MultiClusterObservability configuration
+
+Check the `writeStorage` block to identify which secret is being used for the
+remote-write configuration.
+
+```console
+oc get mco observability -n open-cluster-management-observability -o yaml
+```
+
+Look for the `spec.storageConfig.writeStorage` section and the `name:` of the
+secret being used (e.g., `name: broken-remote-write`).
+
+### 3. Inspect the remote-write Secret
+
+Check the `ep.yaml` data within the secret to find the exact URL and
+credentials being used.
+
+```console
+oc get secret <YOUR_SECRET_NAME> -n open-cluster-management-observability -o jsonpath='{.data.ep\.yaml}' | base64 --decode
+```
+
+Example:
+
+```yaml
+url: http://httpbin.org/status/503
+http_client_config:
+  basic_auth:
+    username: user
+    password: wrong-password
+```
+
+### 4. Manually test the endpoint
+
+Manually test the endpoint from a test pod (as seen in the KCS) to verify if
+the endpoint is reachable and if the credentials are correct.
+
+**Common error patterns to look for:**
+
+* `401 Unauthorized` or `403 Forbidden` - Authentication/authorization issue
+  with credentials
+* `503 Service Unavailable` or `502 Bad Gateway` - External service is down or
+  overloaded
+* `404 Not Found` - Incorrect URL or endpoint path
+* `timeout` - Network connectivity issues or firewall blocking egress traffic
+
+For more information about configuring remote-write endpoints, see [Exporting
+metrics to external
+endpoints](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.14/html-single/observability/index#exporting-metrics-to-external-endpoints).
+
+## Mitigation
+
+The mitigation depends on the errors found in the diagnosis.
+
+### 1. If the url: in the secret is incorrect
+
+Edit the secret and correct the `url:` to point to a valid remote-write endpoint.
+
+```console
+oc edit secret <YOUR_SECRET_NAME> -n open-cluster-management-observability
+```
+
+### 2. If the endpoint is returning 401/403 (Authentication Errors)
+
+Edit the secret and correct the `http_client_config.basic_auth` (or other)
+credentials to match what the external service expects.
+
+```console
+oc edit secret <YOUR_SECRET_NAME> -n open-cluster-management-observability
+```
+
+### 3. If the endpoint is returning 5xx errors
+
+This indicates the external remote-write service itself is unhealthy or
+unavailable. The issue must be resolved on the external system.
+
+Check the external service's status and logs. In the meantime, you can monitor
+the ACM side to see when the service recovers:
+
+```console
+oc logs -f deployment/observability-observatorium-api -n open-cluster-management-observability
+```
+
+The alert will automatically clear once the external service becomes healthy
+and starts accepting requests again.
+
+### 4. If the configuration is no longer needed
+
+To stop the errors and clear the alert, you can disable the remote-write
+feature.
+
+* Back up the MCO:
+
+    ```console
+    oc get mco observability -n open-cluster-management-observability -o yaml > mco-backup.yaml
+    ```
+
+* Edit the MCO:
+
+    ```console
+    oc edit mco observability -n open-cluster-management-observability
+    ```
+
+* Remove the entire `writeStorage:` block from the `spec:` section.
+
+* Save the file. This will restart the `observability-observatorium-api` pods
+  and stop them from trying to send metrics.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\advanced-cluster-management-operator\ACMThanosCompactHalted.md -->
+<!-- ========================================== -->
+
+# ACMThanosCompactHalted
+
+## Meaning
+
+This alert is triggered by the ACM Observability service when the Thanos
+Compactor component has entered a "halted" state for more than 5 minutes.
+
+This "halted" state means the `observability-thanos-compact-0` pod is running,
+but it has encountered an internal, non-retriable error and has stopped
+performing its duties. The alert fires when the metric
+`acm_thanos_compact_halted{job="observability-thanos-compact"}` has a value of
+1.
+
+The Thanos Compactor is a critical background component responsible for
+organizing metric data in object storage, applying retention policies (deleting
+old data), and down-sampling data to improve query performance.
+
+## Impact
+
+If the Thanos Compactor is halted, the metric data in the S3 object store is no
+longer being managed. This has significant consequences:
+
+* **Data Retention policies are not applied**: Old metric data will not be
+  deleted, causing object storage (S3) costs to increase indefinitely.
+
+* **Data Down-sampling fails**: Metric data is not down-sampled into 5-minute
+  and 1-hour aggregates. This will cause Grafana dashboards and queries to
+  become progressively slower especially when querying for longer rangers.
+
+* **Increased storage usage**: The storage use of the Compactor and Store
+  Gateway will keep increasing.
+
+## Diagnosis
+
+The first step is to identify why the compactor has halted by inspecting its
+logs for fatal, non-retriable errors.
+
+Confirm the alert is firing by querying the `acm_thanos_compact_halted` metric
+in the OpenShift console (Observe -> Metrics). The result is `1` if that
+compactor is halted.
+
+```console
+acm_thanos_compact_halted{job="observability-thanos-compact"}
+```
+
+Inspect the logs of the `observability-thanos-compact-0` pod to find the fatal
+error. This pod is in the `open-cluster-management-observability` namespace.
+
+```console
+oc logs -n open-cluster-management-observability observability-thanos-compact-0
+```
+
+Look for one of the following common failure patterns in the logs:
+
+* **Disk Full**: The pod is in a `CrashLoopBackOff` state, and logs show `no
+  space left on device`.
+
+* **Data Corruption**: The logs show `err="compaction: ... get file ...
+  meta.json: EOF"`, `unexpected end of JSON input` or `segment index 0 out of
+  range`. This indicates a corrupted block in the S3 bucket.
+
+* **S3 Connection Failure**: The logs show S3 authentication or connection
+  errors, such as `The request signature we calculated does not match...` (bad
+  secret key) or `no such host` (bad endpoint).
+
+### 1. Diagnosis for 'no space left on device'
+
+If the pod is in a `CrashLoopBackOff` state, you cannot rsh into it. You can
+verify the disk is full by attempting to attach the `PVC` to a debug pod or by
+checking the pod's last-known logs.
+
+### 2. Diagnosis for Data Corruption
+
+This error will appear in the logs while the pod is `Running`, as it attempts
+to scan a malformed `meta.json` file from the S3 bucket.
+
+### 3. Diagnosis for S3 Connection Failure
+
+This error will appear in the logs while the pod is `Running`. This indicates
+the `thanos-object-storage` secret is misconfigured.
+
+Get the `thanos-object-storage` secret and decode it to verify its contents:
+
+```console
+oc get secret thanos-object-storage -n open-cluster-management-observability -o jsonpath='{.data.thanos\.yaml}' | base64 --decode
+```
+
+Check the `endpoint`, `access_key`, and `secret_key` values in the output to
+ensure they are correct.
+
+**Verify the ObjectBucketClaim status:**
+
+If you suspect S3 connection issues, verify the OBC is healthy:
+
+```console
+oc get obc -n open-cluster-management-observability
+oc get configmap <OBC-NAME> -n open-cluster-management-observability -o yaml
+```
+
+Check that the ConfigMap contains valid endpoint and bucket information.
+
+## Mitigation
+
+Resolution depends on the fatal error found during the Diagnosis.
+
+### 1. Halted due to 'no space left on device'
+
+The pod's persistent volume is full.
+
+* Identify the `StorageClass` used by the `PVC`:
+
+    ```console
+    oc get pvc data-observability-thanos-compact-0 -n open-cluster-management-observability -o jsonpath='{.spec.storageClassName}'
+    ```
+
+* Verify the `StorageClass` has `allowVolumeExpansion: true`:
+
+    ```console
+    oc get sc <YOUR_STORAGE_CLASS> -o yaml | grep allowVolumeExpansion
+    ```
+
+* If expansion is allowed, edit the `PVC` to request more storage. This can be
+  done while the pod is crashing.
+
+    ```console
+    oc edit pvc data-observability-thanos-compact-0 -n open-cluster-management-observability
+    ```
+
+* Change `spec.resources.requests.storage` from its current value to a larger
+  one (e.g., 98G to 120G).
+
+* Kubernetes and ODF will automatically expand the volume. The pod will stop
+  crash-looping and will start successfully, clearing the alert.
+
+### 2. Halted due to Data Corruption
+
+A data block in the S3 object store is malformed.
+
+* Identify the corrupted block ID from the pod logs (e.g., `download block
+  01K8JQ8...`).
+
+* Launch a debug pod with the `aws-cli` and the S3 credentials.
+
+* From the debug pod, delete the entire corrupted block directory from the S3
+  bucket:
+
+    ```console
+    aws --endpoint-url <S3_ENDPOINT> --no-verify-ssl s3 rm s3://<BUCKET_NAME>/<CORRUPTED_BLOCK_ID>/ --recursive
+    ```
+
+* Restart the `observability-thanos-compact-0` pod to clear the halted state:
+
+    ```console
+    oc delete pod -n open-cluster-management-observability observability-thanos-compact-0
+    ```
+
+### 3. Halted due to S3 Connection Failure
+
+The `thanos-object-storage` secret in the
+`open-cluster-management-observability` namespace is incorrect.
+
+* Retrieve the correct S3 credentials (endpoint, bucket name, access key, and
+  secret key) from your ODF `ObjectBucketClaim` (OBC).
+
+* Create a correct `thanos.yaml` file on your local machine.
+
+* Update the `thanos-object-storage` secret with the correct configuration:
+
+    ```console
+    $ oc create secret generic thanos-object-storage \
+      -n open-cluster-management-observability \
+      --from-file=thanos.yaml=./thanos.yaml \
+      --dry-run=client -o yaml | oc apply -f -
+    ```
+
+* Restart the `observability-thanos-compact-0` pod to apply the new secret:
+
+    ```console
+    oc delete pod -n open-cluster-management-observability observability-thanos-compact-0
+    ```
+
+### 4. Verify Resolution
+
+After applying any mitigation, verify the compactor has recovered:
+
+* Confirm the the `acm_thanos_compact_halted` metric has returned to 0. You can
+query it in the OpenShift console (Observe -> Metrics).
+
+    ```console
+    acm_thanos_compact_halted{job="observability-thanos-compact"}
+    ```
+
+* Monitor the pod logs for successful compaction activity:
+
+    ```console
+    oc logs -n open-cluster-management-observability observability-thanos-compact-0 --tail=50 -f
+    ```
+
+* The alert should clear within 5-10 minutes of successful compaction.
+
+* If the compactor has not been working for a long period the
+  `acm_thanos_compact_todo_compactions` metric is expected to be high. After
+  restarting the compactor keep an eye on this metric to ensure that the number
+  of todo compactions is decreasing. It might take several weeks to work
+  through the full compaction backlog and for the todo compactions to fall down
+  to below 10.
+
+**Expected resolution time**: Alert should clear within 5-10 minutes after the
+compactor resumes normal operation. The compaction backlog might take several
+weeks to get through depending on how long the compactor was non-functioning
+for.
+
+For more detailed troubleshooting steps and additional scenarios, refer to the
+Red Hat Knowledge Base article: [Thanos compactor
+halted](https://access.redhat.com/solutions/7080672)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\advanced-cluster-management-operator\ACMUWLMetricsCollectorFederationError.md -->
+<!-- ========================================== -->
+
+# ACMUWLMetricsCollectorFederationError
+
+## Meaning
+
+This alert fires when the ACM User Workload (UWL) Metrics Collector receives a
+high rate of non-2xx (e.g., 403 Forbidden, 500 Server Error) responses while
+trying to federate (scrape) metrics from the Hub cluster's User Workload
+Prometheus.
+
+The query for this alert is `(sum by (status_code, type)
+(rate(acm_uwl_metrics_collector_federate_requests_total{status_code!~"2.*"}[10m])))
+> 10`. This means the alert will fire if the rate of failed scrapes (with a
+valid HTTP error code) is greater than 10 per second for a continuous 10-minute
+period.
+
+This component is different from the platform metrics collector. This one
+(`uwl-metrics-collector-deployment`) is specifically responsible for collecting
+metrics from your own applications in the `openshift-user-workload-monitoring`
+namespace.
+
+## Impact
+
+Metrics from user-defined workloads (e.g., custom application metrics) are not
+being collected by ACM Observability. This will cause user-created dashboards
+in Grafana to have no data.
+
+**What user workload monitoring includes:**
+
+* Custom Prometheus metrics exposed by your applications (e.g., `/metrics`
+  endpoints)
+* ServiceMonitors and PodMonitors created in user namespaces
+* Custom application-specific metrics and alerts
+
+**Who is affected:**
+
+* Application developers relying on custom metrics dashboards
+* Teams monitoring custom application SLIs/SLOs
+
+This alert does not affect the collection of OpenShift platform metrics
+(cluster CPU, memory, etc.), which are handled by the separate
+`metrics-collector-deployment`.
+
+## Diagnosis
+
+The primary goal is to determine why the `uwl-metrics-collector-deployment` pod
+is receiving HTTP errors from the user workload Prometheus. The most likely
+cause is an RBAC (Role-Based Access Control) failure.
+
+### 1. Verify User Workload Monitoring is enabled
+
+Before investigating collector issues, confirm that User Workload Monitoring is
+enabled on your cluster:
+
+```console
+oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml | grep enableUserWorkload
+```
+
+If not present or set to `false`, user workload monitoring is not enabled. See
+the [OpenShift
+documentation](https://docs.openshift.com/container-platform/latest/monitoring/enabling-monitoring-for-user-defined-projects.html)
+for enabling it.
+
+### 2. Check the logs of the uwl-metrics-collector-deployment pod
+
+This is the most important step. The logs will show the exact error.
+
+```console
+oc logs -f deployment/uwl-metrics-collector-deployment -n open-cluster-management-observability
+```
+
+### 3. Analyze the log error
+
+* **If you see `err="... i/o timeout"` or `err="... EOF"`**:
+
+    This is a network-level error, likely caused by a `NetworkPolicy`. This
+    type of error will not trigger the alert, as it does not have an HTTP
+    status code.
+
+* **If you see `err="... 403 Forbidden"` or `err="... 401 Unauthorized"`**:
+
+    This is an authentication/authorization error. It means the collector is
+    not authorized to scrape the user workload Prometheus.
+
+### 4. If you see 403/401 errors, investigate the collector's RBAC permissions
+
+* Find the `ServiceAccount` used by the `uwl-metrics-collector-deployment` pod:
+
+    ```console
+    oc get deployment uwl-metrics-collector-deployment -n open-cluster-management-observability -o jsonpath='{.spec.template.spec.serviceAccountName}'
+    ```
+
+    (This will likely be `uwl-metrics-collector-sa` or
+    `endpoint-observability-operator-sa`)
+
+* Find the `ClusterRoleBinding` that grants this `ServiceAccount` permission.
+  (Replace `<SA_NAME>` with the name you found above):
+
+    ```console
+    oc get clusterrolebindings -o yaml | grep -B 10 -A 10 "<SA_NAME>"
+    ```
+
+* Look for the binding that grants this `ServiceAccount` the
+  `cluster-monitoring-view` role or a specific role for
+  `openshift-user-workload-monitoring`.
+
+## Mitigation
+
+The RBAC permissions for the `uwl-metrics-collector-deployment` are
+automatically managed by the `endpoint-observability-operator`. If the
+permissions are missing or incorrect, it might be because the operator's
+reconciliation loop has failed.
+
+### 1. Check the logs of the `endpoint-observability-operator`
+
+Check the logs of the `endpoint-observability-operator` (in the
+`open-cluster-management-observability` namespace if on a Hub or
+`open-cluster-management-addon-observability` if on a Managed Cluster) for
+errors.
+
+```console
+oc logs -n open-cluster-management-addon-observability deployment/endpoint-observability-operator
+```
+
+Look for any errors related to "reconciling" or "failed to create
+ClusterRoleBinding".
+
+### 2. Restart the endpoint-observability-operator pod
+
+This is often the safest and fastest way to fix the issue. Restarting the
+operator will force it to re-run its reconciliation loop, and it will re-create
+or fix the missing/corrupted `ClusterRoleBinding` for the UWL collector.
+
+```console
+oc delete pod -n open-cluster-management-observability -l name=endpoint-observability-operator
+```
+
+After the operator restarts, the `uwl-metrics-collector-deployment` pod's 403
+errors should stop, and the alert will clear after the 10-minute window.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\advanced-cluster-management-operator\ACMUWLMetricsCollectorForwardRemoteWriteError.md -->
+<!-- ========================================== -->
+
+# ACMUWLMetricsCollectorForwardRemoteWriteError
+
+## Meaning
+
+This alert fires when the ACM User Workload (UWL) Metrics Collector receives a
+high rate of non-2xx (e.g., 403 Forbidden, 503 Service Unavailable) responses
+while trying to "remote write" (forward) its scraped metrics to the central
+Observability API (`observability-observatorium-api`).
+
+The alert's query is
+`(sum(rate(acm_uwl_metrics_collector_forward_write_requests_total{status_code!~"2.*"}[10m])))
+/ (sum(rate(acm_uwl_metrics_collector_forward_write_requests_total[10m]))) >
+0.2`. This means the alert will fire if the percentage of failed remote-write
+requests (with a valid HTTP error code) is more than 20% for a continuous
+10-minute period.
+
+This component (`uwl-metrics-collector-deployment`) is separate from the
+platform collector and is responsible only for metrics from your own
+applications (in `openshift-user-workload-monitoring`).
+
+## Impact
+
+User-defined workload metrics (e.g., custom application metrics) from the Hub
+cluster are not being successfully stored in the ACM Observability stack. This
+will cause custom Grafana dashboards to be empty or show "No Data".
+
+**Data loss risk**: The UWL metrics collector has an internal buffer. If this
+issue is not resolved quickly (typically within 1-2 hours), metrics may be
+dropped to prevent memory exhaustion, resulting in permanent gaps in your
+application monitoring data.
+
+**Symptoms visible to users:**
+
+* Custom application dashboards show "No Data" or gaps
+* ServiceMonitor metrics missing from Grafana
+* Custom application alerts not firing due to missing data
+
+This alert does not affect the collection of OpenShift platform metrics
+(cluster CPU, memory, etc.), which are handled by the separate
+`metrics-collector-deployment`.
+
+## Diagnosis
+
+The primary goal is to determine why the `uwl-metrics-collector-deployment` pod
+is failing to send data to the `observability-observatorium-api`.
+
+### 1. Check the logs of the uwl-metrics-collector-deployment pod
+
+This is the most important step. The logs will show the exact error.
+
+```console
+oc logs -f deployment/uwl-metrics-collector-deployment -n open-cluster-management-observability
+```
+
+### 2. Analyze the log error
+
+* **If you see `err="... EOF"` or `err="... i/o timeout"`**:
+
+    This is a network-level error, not an HTTP error, and will not typically
+    trigger this alert. This error means the collector cannot reach the
+    `observability-observatorium-api` service at all. Check that the
+    `observability-observatorium-api` pods are running.
+
+* **If you see `err="... 401 Unauthorized"` or `err="... 403 Forbidden"`**:
+
+    This is an authentication/authorization error. This is the most likely
+    cause of the alert. It means the `observability-observatorium-api` is
+    rejecting the collector's connection.
+
+### 3. If you see 401/403 errors, investigate the collector's mTLS certificate
+
+The `uwl-metrics-collector-deployment` authenticates using an mTLS client
+certificate. This error means the certificate is likely missing, invalid, or
+has been rejected.
+
+* Find the secret name for the pod's mTLS certificate:
+
+    ```console
+    oc get deployment uwl-metrics-collector-deployment -n open-cluster-management-observability -o yaml | grep secretName
+    ```
+
+* Look for a secret name related to client certs (e.g.,
+  `observability-controller-open-cluster-management.io-observability-signer-client-cert`
+  or a `uwl-` specific version).
+
+### 4. Check the observability-observatorium-api service health
+
+Verify the API service is healthy on the Hub and has valid endpoints:
+
+```console
+oc get endpoints observability-observatorium-api -n open-cluster-management-observability
+```
+
+The output should show IP addresses. If empty, the
+observability-observatorium-api pods may be failing their readiness probes.
+
+## Mitigation
+
+This alert is almost always caused by a problem with the client certificate
+used for mTLS authentication. These certificates are managed by the
+`multicluster-observability-operator`.
+
+### 1. If the diagnosis shows 401/403 errors (Authentication Failure)
+
+The fastest and safest way to resolve this is to force the
+`multicluster-observability-operator` to reconcile its certificates. Restarting
+the operator will cause it to check all its managed components and reissue any
+missing or invalid certificates.
+
+* Restart the `multicluster-observability-operator` pod:
+
+    ```console
+    oc delete pod -n open-cluster-management -l name=multicluster-observability-operator
+    ```
+
+* After the operator restarts, it will fix the secret. You must then restart
+  the `uwl-metrics-collector-deployment` pod to pick up the new, valid secret.
+
+    ```console
+    oc scale deployment uwl-metrics-collector-deployment -n open-cluster-management-observability --replicas=0
+    oc scale deployment uwl-metrics-collector-deployment -n open-cluster-management-observability --replicas=1
+    ```
+
+### 2. If the diagnosis shows EOF or i/o timeout (Network Failure)
+
+This means the `observability-observatorium-api` service is down.
+
+* Check the status of the `observability-observatorium-api` deployment and
+  scale it up if needed:
+
+    ```console
+    oc get deployment observability-observatorium-api -n open-cluster-management-observability
+    ```
+
+* Scale the deployment if needed:
+
+    ```console
+    oc scale deployment observability-observatorium-api -n open-cluster-management-observability --replicas=2
+    ```
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-dns-operator\CoreDNSErrorsHigh.md -->
+<!-- ========================================== -->
+
+# CoreDNSErrorsHigh
+
+## Meaning
+
+CoreDNS is returning SERVFAIL more than 1% of total requests.
+
+## Impact
+
+Warning: Some requests are not resolved.
+
+## Diagnosis
+
+1. Check DNS operator:
+
+    ```shell
+    oc get co/dns
+    ```
+
+2. Check CoreDNS daemonsets if they are running on all nodes:
+
+    ```shell
+    oc get ds -n openshift-dns
+    ```
+
+3. Check CoreDNS pods if they can reach the upstream nameservers:
+
+    ```shell
+    # CoreDNS pods name start with dns-default as prefix
+    oc exec pod/$COREDNS_POD_NAME -c dns -n openshift-dns -- \
+        dig -q $DOMAIN_NAME @$IP_OF_UPSTREAM_NAMESERVER
+    ```
+
+4. Check the upstream nameservers if they are returning SERVFAIL:
+
+    ```shell
+    # Enable Debug logLevel in CoreDNS
+    oc patch dnses.operator.openshift.io/default \
+        --patch '{"spec":{"logLevel":"Debug"}}' --type=merge
+    
+    # Follow the log streams in proportion to the number of CoreDNS pods
+    oc logs -c dns -l dns.operator.openshift.io/daemonset-dns=default \
+        -n openshift-dns --follow --max-log-requests $NUMBER_OF_COREDNS_PODS --timestamps
+    ```
+
+## Mitigation
+
+- If there is a connectivity issue between the CoreDNS pods and the workload,
+review the [Controlling DNS pod placement](https://docs.openshift.com/container-platform/4.17/networking/networking_operators/dns-operator.html#nw-controlling-dns-pod-placement_dns-operator):
+
+    ```shell
+    oc edit dns.operator/default
+    ```
+
+    ```yaml
+    spec:
+      nodePlacement:
+        ...output omitted...
+    ```
+
+- If there is a connectivity issue between the CoreDNS pods and the upstream
+nameservers, review the undercloud connectivity.
+
+- If the upstream nameservers is not healthy to respond to the queries by
+the CoreDNS pods, apply a silence to the alert, until these servers are troubleshooted.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdDatabaseQuotaLowSpace.md -->
+<!-- ========================================== -->
+
+# etcdDatabaseQuotaLowSpace
+
+## Meaning
+
+This alert fires at critical severity when the total existing DB size exceeds
+85% of the maximum DB quota. The consumed space is in Prometheus represented by
+the metric `etcd_mvcc_db_total_size_in_bytes`, and the DB quota size is defined
+by `etcd_server_quota_backend_bytes`.
+
+## Impact
+
+In case the DB size exceeds the DB quota, no writes can be performed anymore on
+the etcd cluster. This further prevents any updates in the cluster, such as the
+creation of pods.
+
+## Diagnosis
+
+The following two approaches can be used for the diagnosis.
+
+### CLI Checks
+
+To run `etcdctl` commands, we need to `rsh` into the `etcdctl` container of any
+etcd pod.
+
+```console
+$ oc rsh -c etcdctl -n openshift-etcd $(oc get pod -l app=etcd -oname -n openshift-etcd | awk -F"/" 'NR==1{ print $2 }')
+```
+
+Validate that the `etcdctl` command is available:
+
+```console
+$ etcdctl version
+```
+
+`etcdctl` can be used to fetch the DB size of the etcd endpoints.
+
+```console
+$ etcdctl endpoint status -w table
+```
+
+### PromQL queries
+
+Check the percentage consumption of etcd DB with the following query in the
+metrics console:
+
+```console
+(etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes) * 100
+```
+
+Check the DB size in MB that can be reduced after defragmentation:
+
+```console
+(etcd_mvcc_db_total_size_in_bytes - etcd_mvcc_db_total_size_in_use_in_bytes)/1024/1024
+```
+
+## Mitigation
+
+### Capacity planning
+
+If the `etcd_mvcc_db_total_size_in_bytes` shows that you are growing close to
+the `etcd_server_quota_backend_bytes`, etcd almost reached max capacity and it's
+start planning for new cluster.
+
+In the meantime before migration happens, you can use defrag to gain some time.
+
+### Defrag
+
+When the etcd DB size increases, we can defragment existing etcd DB to optimize
+DB consumption as described in [here][etcdDefragmentation]. Run the following
+command in all etcd pods.
+
+```console
+$ etcdctl defrag
+```
+
+As validation, check the endpoint status of etcd members to know the reduced
+size of etcd DB. Use for this purpose the same diagnostic approaches as listed
+above. More space should be available now.
+
+[etcdDefragmentation]: https://etcd.io/docs/v3.4.0/op-guide/maintenance/
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdGRPCReadRequestsSlow.md -->
+<!-- ========================================== -->
+
+# etcdGRPCReadRequestsSlow
+
+## Alert Description
+
+| Impacted User   | Impact |
+|:----------------|:-------|
+| Customer Impact | High   |
+| SREP Impact     | High   |
+
+**Severity:** Critical
+
+**Alert Expression:**
+```promql
+histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{job="etcd", grpc_method="Range", grpc_type="unary"}[10m])) without(grpc_type)) > 3
+```
+
+**Trigger Condition:**
+The 99th percentile of etcd gRPC Range requests exceeds 3 seconds for 10 minutes.
+
+**What it means:**
+etcd is taking too long to serve critical read requests.
+Range requests are the primary read operation in etcd's gRPC API, used by:
+- `kubectl get` commands (listing pods, nodes, deployments, etc.)
+- Kubernetes API server listing resources
+- Watch operation initialization
+- Any query for key-value data from etcd
+
+**Common Root Causes:**
+1. **Disk performance degradation** (~70% of cases) - Slow fsync operations
+2. **CPU/Memory exhaustion** (~15% of cases) - Resource contention on control plane
+3. **Network latency** (~10% of cases) - High peer round-trip time
+4. **Database size/quota issues** (~5% of cases) - Large database or quota limit
+
+## Troubleshooting
+
+### Check for Correlated Critical Alerts
+
+This alert's signal closely matches with some existing alerts.
+Look for these commonly co-firing alerts for mitigation steps:
+
+1. **etcdHighFsyncDurations (CRITICAL)** - Most likely cause - disk performance.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdHighFsyncDurations.md).
+
+2. **etcdNoLeader (CRITICAL)** - May have fired 9+ minutes earlier.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdNoLeader.md).
+
+3. **etcdInsufficientMembers (CRITICAL)** - Quorum loss scenario.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdInsufficientMembers.md).
+
+4. **etcdHighNumberOfFailedGRPCRequests (CRITICAL)** - Requests timing out.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdHighNumberOfFailedGRPCRequests.md).
+
+### Refer to the `etcd` team
+
+If you are unsure about further steps to take, you can refer to common [etcd checks](https://github.com/openshift/ops-sop/blob/master/v4/troubleshoot/etcd.md#etcd-checks).
+Collect information on current situation of the `etcd`.
+You can also refer it to the `etcd` team in #forum-ocp-etcd.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdGRPCRequestsSlow.md -->
+<!-- ========================================== -->
+
+# etcdGRPCRequestsSlow
+
+## Meaning
+
+This alert fires when the 99th percentile of etcd gRPC requests are too slow.
+
+## Impact
+
+When requests are too slow, they can lead to various scenarios like leader
+election failure, slow reads and writes and general cluster instability.
+
+## Diagnosis
+
+This could be result of slow disk, network or CPU starvation/contention.
+
+### Slow disk
+
+One of the most common reasons for slow gRPC requests is disk. Checking disk
+related metrics and dashboards should provide a more clear picture.
+
+#### PromQL queries used to troubleshoot
+
+Verify the value of how slow the etcd gRPC requests are by using the following
+query in the metrics console:
+
+```console
+histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{job=~".*etcd.*", grpc_type="unary"}[5m])) without(grpc_type))
+```
+That result should give a rough timeline of when the issue started.
+
+`etcd_disk_wal_fsync_duration_seconds_bucket` reports the etcd disk fsync
+duration, `etcd_server_leader_changes_seen_total` reports the leader changes. To
+rule out a slow disk and confirm that the disk is reasonably fast, 99th
+percentile of the etcd_disk_wal_fsync_duration_seconds_bucket should be less
+than 10ms. Query in metrics UI:
+
+```console
+histogram_quantile(0.99, sum by (instance, le) (irate(etcd_disk_wal_fsync_duration_seconds_bucket{job="etcd"}[5m])))
+```
+
+When txn calls are slow, another culprit can be the network roundtrip between
+ the nodes. You can observe this with:
+
+```console
+histogram_quantile(0.99, sum by (instance, le) (irate(etcd_network_peer_round_trip_time_seconds_bucket{job="etcd"}[5m])))
+```
+
+
+You can find more performance troubleshooting tips in
+ [OpenShift etcd Performance Metrics](https://github.com/openshift/cluster-etcd-operator/blob/master/docs/performance-metrics.md).
+
+#### Console dashboards
+
+In the OpenShift dashboard console under Observe section, select the etcd
+dashboard. There are both RPC rate as well as Disk Sync Duration dashboards
+which will assist with further issues.
+
+### Resource exhaustion
+
+It can happen that etcd responds slower due to CPU resource exhaustion.
+This was seen in some cases when one application was requesting too much CPU
+which led to this alert firing for multiple methods.
+
+Often if this is the case, we also see
+`etcd_disk_wal_fsync_duration_seconds_bucket` slower as well.
+
+To confirm this is the cause of the slow requests either:
+
+1. In OpenShift console on primary page under "Cluster utilization" view the
+   requested CPU vs available.
+
+2. PromQL query is the following to see top consumers of CPU:
+
+```console
+      topk(25, sort_desc(
+        sum by (namespace) (
+          (
+            sum(avg_over_time(pod:container_cpu_usage:sum{container="",pod!=""}[5m])) BY (namespace, pod)
+            *
+            on(pod,namespace) group_left(node) (node_namespace_pod:kube_pod_info:)
+          )
+          *
+          on(node) group_left(role) (max by (node) (kube_node_role{role=~".+"}))
+        )
+      ))
+```
+
+### Rogue Workloads
+
+In some cases, we've seen non-OpenShift workload put a lot of stress on the
+API server that eventually cascades into etcd. One specific instance was
+listing all pods across namespaces exhausting CPU and memory on API server
+and subsequently on etcd.
+
+Please consult the audit log and see whether some service accounts make
+suspicious calls, both in terms of generality (listings, many/all namespaces)
+and frequency (eg listing all pods every 10s).
+
+
+## Mitigation
+
+Depending on what resource was determined to be exhausted,
+you can try the following:
+
+### CPU
+
+Find the offending process that uses too much CPU, try to limit or
+shutdown the process. If feasible on clouds,
+adding more or faster CPUs may help to reduce the latency.
+
+
+### Disk
+
+Find the offending process that causes the disk performance to degrade,
+this can also be a noisy neighbour process on the control plane node
+(eg fluentd with logging, OVN) or etcd itself. If the culprit is determined
+to etcd, try to reduce the load coming from the apiserver.
+Most commonly this also happens when a cluster is scaled up with
+many more nodes, so reducing the cluster scale again can help.
+
+If feasible on clouds, upgrading your storage or instance type
+can significantly increase your sequential IOPS and available bandwidth.
+
+
+### Network
+
+Ensure nothing is exhausting the network bandwidth as this causes package
+loss and increases the latency. As with the previous two sections,
+try to isolate the offending process and mitigate from there.
+If etcd is the offender, try to reduce load/increase the available resources.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdGRPCWriteRequestsSlow.md -->
+<!-- ========================================== -->
+
+# etcdGRPCWriteRequestsSlow
+
+## Alert Description
+
+| Impacted User   | Impact |
+|:----------------|:-------|
+| Customer Impact | High   |
+| SREP Impact     | High   |
+
+**Severity:** Critical
+
+**Alert Expression:**
+```promql
+histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{job="etcd", grpc_method="Txn", grpc_type="unary"}[10m])) without(grpc_type)) > 5
+```
+
+**Trigger Condition:**
+The 99th percentile of etcd gRPC Txn (write) requests exceeds 5 seconds for 10 minutes.
+
+**What it means:**
+etcd is taking too long to commit critical write requests.
+Transaction requests are the primary write operation in etcd's gRPC API, used by:
+
+- `kubectl apply/create/delete/patch` commands
+- Kubernetes API server writing any resource changes
+- Pod scheduling and lifecycle operations
+- Resource updates by controllers and operators
+- Any create/update/delete operation in the cluster
+- Cluster state modifications requiring Raft consensus
+
+## Troubleshooting
+
+### Check for Correlated Critical Alerts
+
+This alert's signal closely matches with some existing alerts.
+Look for these commonly co-firing alerts for mitigation steps:
+
+1. **etcdHighFsyncDurations (CRITICAL)** - Most likely cause- disk write performance.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdHighFsyncDurations.md).
+
+3. **etcdHighNumberOfFailedGRPCRequests (CRITICAL)** - Write requests timing out/failing.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdHighNumberOfFailedGRPCRequests.md).
+
+4. **etcdGRPCReadRequestsSlow (CRITICAL)** - Same root cause affects reads too.
+Refer to the SOP [here](https://github.com/openshift/ops-sop/blob/master/v4/alerts/etcdGRPCReadRequestsSlow.md).
+
+### Refer to the `etcd` team
+
+Collect information on current situation of the `etcd`.
+You can also refer it to the `etcd` team in #forum-ocp-etcd.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdHighFsyncDurations.md -->
+<!-- ========================================== -->
+
+# etcdHighFsyncDurations
+
+## Meaning
+
+This alert fires when the 99th percentile of etcd disk fsync duration is too
+high for 10 minutes.
+
+## Impact
+
+When this happens it can lead to various scenarios like leader election failure,
+frequent leader elections, slow reads and writes.
+
+## Diagnosis
+
+This could be result of slow disk possibly due to fragmented state in etcd or
+simply due to slow disk.
+
+### Slow disk
+
+Checking disk related metrics and dashboards should provide a more clear
+picture.
+
+#### PromQL queries used to troubleshoot
+
+`etcd_disk_wal_fsync_duration_seconds_bucket` reports the etcd disk fsync
+duration, `etcd_server_leader_changes_seen_total` reports the leader changes. To
+rule out a slow disk and confirm that the disk is reasonably fast, 99th
+percentile of the etcd_disk_wal_fsync_duration_seconds_bucket should be less
+than 10ms. Query in metrics UI:
+
+```console
+histogram_quantile(0.99, sum by (instance, le) (irate(etcd_disk_wal_fsync_duration_seconds_bucket{job="etcd"}[5m])))
+```
+
+You can find more performance troubleshooting tips in
+[OpenShift etcd Performance Metrics](https://github.com/openshift/cluster-etcd-operator/blob/master/docs/performance-metrics.md).
+
+#### Console dashboards
+
+In the OpenShift dashboard console under Observe section, select the etcd
+dashboard. There are both leader elections as well as Disk Sync Duration
+dashboards which will assit with further issues.
+
+## Mitigation
+
+### Fragmented state
+
+In the case of slow fisk or when the etcd DB size increases, we can defragment
+existing etcd DB to optimize DB consumption as described in
+[here][etcdDefragmentation]. Run the following command in all etcd pods.
+
+```console
+$ etcdctl defrag
+```
+
+As validation, check the endpoint status of etcd members to know the reduced
+size of etcd DB. Use for this purpose the same diagnostic approaches as listed
+above. More space should be available now.
+
+Further info on etcd best practices can be found in the [OpenShift docs
+here][etcdPractices].
+
+[etcdDefragmentation]: https://etcd.io/docs/v3.4.0/op-guide/maintenance/
+[etcdPractices]: https://docs.openshift.com/container-platform/4.13/scalability_and_performance/recommended-performance-scale-practices/recommended-etcd-practices.html
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdHighNumberOfFailedGRPCRequests.md -->
+<!-- ========================================== -->
+
+# etcdHighNumberOfFailedGRPCRequests
+
+## Meaning
+
+This alert fires when at least 50% of etcd gRPC requests failed in the past 10
+minutes and sends a warning at 10%.
+
+## Impact
+
+First establish which gRPC method is failing, this will be visible in the alert.
+If it's not part of the alert, the following query will display method and etcd
+instance that has failing requests:
+
+```sh
+(sum(rate(grpc_server_handled_total{job="etcd", grpc_code=~"Unknown|FailedPrecondition|ResourceExhausted|Internal|Unavailable|DataLoss|DeadlineExceeded"}[5m])) without (grpc_type, grpc_code)
+    /
+(sum(rate(grpc_server_handled_total{job="etcd"}[5m])) without (grpc_type, grpc_code)
+    > 2 and on ()(sum(cluster_infrastructure_provider{type!~"ipi|BareMetal"} == bool 1)))) * 100 > 10
+```
+
+## Diagnosis
+
+All the gRPC errors should also be logged in each respective etcd instance logs.
+You can get the instance name from the alert that is firing or by running the
+query detailed above. Those etcd instance logs should serve as further insight
+into what is wrong.
+
+To get logs of etcd containers either check the instance from the alert and
+check logs directly or run the following:
+
+```sh
+oc logs -n openshift-etcd -lapp=etcd -c etcd
+```
+
+### Defrag method errors
+
+If defrag method is failing, this could be due to defrag that is periodically
+performed by cluster-etcd-operator pe starting from OpenShift v4.9 onwards. To
+verify this check the logs of cluster-etcd-operator.
+
+```sh
+oc logs -l app=etcd-operator -n openshift-etcd-operator --tail=-1
+```
+
+If you have run defrag manually on older OpenShift versions check the errors of
+those manual runs.
+
+### MemberList method errors
+
+Member list is most likely performed by cluster-etcd-operator, so it's also best
+to check also logs of cluster-etcd-operator for any errors:
+
+```sh
+oc logs -l app=etcd-operator -n openshift-etcd-operator --tail=-1
+```
+
+## Mitigation
+
+Depending on the above diagnosis, the issue will most likely be described in the
+error log line of either etcd or openshift-etcd-operator. Most likely causes
+tend to be networking issues.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdInsufficientMembers.md -->
+<!-- ========================================== -->
+
+# etcdInsufficientMembers
+
+## Meaning
+
+This alert fires when there are fewer instances available than are needed by
+etcd to be healthy.
+
+## Impact
+
+When etcd does not have a majority of instances available the Kubernetes and
+OpenShift APIs will reject read and write requests and operations that preserve
+the health of workloads cannot be performed.
+
+## Diagnosis
+
+This can occur multiple control plane nodes are powered off or are unable to
+connect each other via the network. Check that all control plane nodes are
+powered and that network connections between each machine are functional.
+
+Check any other critical, warning or info alerts firing that can assist with the
+diagnosis.
+
+Login to the cluster. Check health of master nodes if any of them is in
+`NotReady` state or not.
+
+```console
+$ oc get nodes -l node-role.kubernetes.io/master=
+```
+
+Check if an upgrade is in progress.
+
+```console
+$ oc adm upgrade
+```
+
+In case there is no upgrade going on, but there is a change in the
+`machineconfig` for the master pool causing a rolling reboot of each master
+node, this alert can be triggered as well. We can check if the
+`machineconfiguration.openshift.io/state : Working` annotation is set for any of
+the master nodes. This is the case when the [machine-config-operator
+(MCO)](https://github.com/openshift/machine-config-operator) is working on it.
+
+```console
+$ oc get nodes -l node-role.kubernetes.io/master= -o template --template='{{range .items}}{{"===> node:> "}}{{.metadata.name}}{{"\n"}}{{range $k, $v := .metadata.annotations}}{{println $k ":" $v}}{{end}}{{"\n"}}{{end}}'
+```
+
+### General etcd health
+
+To run `etcdctl` commands, we need to `rsh` into the `etcdctl` container of any
+etcd pod.
+
+```console
+$ oc rsh -c etcdctl -n openshift-etcd $(oc get pod -l app=etcd -oname -n openshift-etcd | awk -F"/" 'NR==1{ print $2 }')
+```
+
+Validate that the `etcdctl` command is available:
+
+```console
+$ etcdctl version
+```
+
+Run the following command to get the health of etcd:
+
+```console
+$ etcdctl endpoint health -w table
+```
+## Mitigation
+
+### Disaster and recovery
+
+If an upgrade is in progress, the alert may automatically resolve in some time
+when the master node comes up again. If MCO is not working on the master node,
+check the cloud provider to verify if the master node instances are running or not.
+
+In the case when you are running on AWS, the AWS instance retirement might need
+a manual reboot of the master node.
+
+As a last resort if none of the above fix the issue and the alert is still
+firing, for etcd specific issues follow the steps described in the [disaster and
+recovery docs][docs].
+
+[docs]: https://docs.openshift.com/container-platform/latest/backup_and_restore/control_plane_backup_and_restore/disaster_recovery/about-disaster-recovery.html
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdMembersDown.md -->
+<!-- ========================================== -->
+
+# etcdMembersDown
+
+## Meaning
+
+This alert fires when one or more etcd member goes down and evaluates the
+number of etcd members that are currently down. Often, this alert was observed
+as part of a cluster upgrade when a master node is being upgraded and requires a
+reboot.
+
+## Impact
+
+In etcd a majority of (n/2)+1 has to agree on membership changes or key-value
+upgrade proposals. With this approach, a split-brain inconsistency can be
+avoided. In the case that only one member is down in a 3-member cluster, it
+still can make forward progress. Due to the fact that the quorum is 2 and 2
+members are still alive. However, when more members are down, the cluster
+becomes unrecoverable.
+
+## Diagnosis
+
+Login to the cluster. Check health of master nodes if any of them is in
+`NotReady` state or not.
+
+```console
+$ oc get nodes -l node-role.kubernetes.io/master=
+```
+
+Check if an upgrade is in progress.
+
+```console
+$ oc adm upgrade
+```
+
+In case there is no upgrade going on, but there is a change in the
+`machineconfig` for the master pool causing a rolling reboot of each master
+node, this alert can be triggered as well. We can check if the
+`machineconfiguration.openshift.io/state : Working` annotation is set for any of
+the master nodes. This is the case when the [machine-config-operator
+(MCO)](https://github.com/openshift/machine-config-operator) is working on it.
+
+```console
+$ oc get nodes -l node-role.kubernetes.io/master= -o template --template='{{range .items}}{{"===> node:> "}}{{.metadata.name}}{{"\n"}}{{range $k, $v := .metadata.annotations}}{{println $k ":" $v}}{{end}}{{"\n"}}{{end}}'
+```
+
+### General etcd health
+
+To run `etcdctl` commands, we need to `rsh` into the `etcdctl` container of any
+etcd pod.
+
+```console
+$ oc rsh -c etcdctl -n openshift-etcd $(oc get pod -l app=etcd -oname -n openshift-etcd | awk -F"/" 'NR==1{ print $2 }')
+```
+
+Validate that the `etcdctl` command is available:
+
+```console
+$ etcdctl version
+```
+
+Run the following command to get the health of etcd:
+
+```console
+$ etcdctl endpoint health -w table
+```
+
+## Mitigation
+
+If an upgrade is in progress, the alert may automatically resolve in some time
+when the master node comes up again. If MCO is not working on the master node,
+check the cloud provider to verify if the master node instances are running or not.
+
+In the case when you are running on AWS, the AWS instance retirement might need
+a manual reboot of the master node.
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdNoLeader.md -->
+<!-- ========================================== -->
+
+# etcdNoLeader
+
+## Meaning
+
+This alert is triggered when etcd cluster does not have a leader for more than 1
+minute.
+
+## Impact
+
+When there is no leader, Kubernetes and OpenShift APIs will not be able to work
+as expected and cluster cannot process any writes or reads, and any write
+requests are queued for processing until a new leader is elected. Operations
+that preserve the health of the workloads cannot be performed.
+
+## Diagnosis
+
+### Control plane nodes issue
+
+This can occur multiple control plane nodes are powered off or are unable to
+connect each other via the network. Check that all control plane nodes are
+powered and that network connections between each machine are functional.
+
+### Slow disk issue
+
+Another potential cause could be slow disk, inspect the `Disk Sync
+Duration`dashboard, as well as the `Total Leader Elections Per Day` to get more
+insight and help with diagnosis. Both dashboards are located in the OpenShift
+console under `etcd` dashboard.
+
+### Other
+
+Check the logs of etcd containers to see any further information and to verify
+that etcd does not have leader. Logs should contain something like `etcdserver:
+no leader`. etcd containers are running in the `openshift-etcd`
+namespace/project and in the `etcd` container.
+
+## Mitigation
+
+### Disaster and recovery
+
+Follow the steps described in the [disaster and recovery docs][docs].
+
+
+[docs]: https://docs.openshift.com/container-platform/latest/backup_and_restore/control_plane_backup_and_restore/disaster_recovery/about-disaster-recovery.html
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-etcd-operator\etcdSignerCAExpirationCritical.md -->
+<!-- ========================================== -->
+
+# etcdSignerCAExpirationCritical
+
+## Meaning
+
+This alert fires when the signer CA certificate of etcd (metrics or server)
+is having one year left before expiration.
+
+## Impact
+
+When the etcd server signer certificate expires, your cluster will become
+unavailable and very hard to recover.
+If the metrics signer certificate expires, you will lose metrics and alerts
+for etcd.
+
+## Mitigation
+
+Please follow the [OpenShift documentation here][manualRota] on how to manually
+ rotate the signer certificates.
+
+[manualRota]: https://docs.openshift.com/container-platform/4.16/security/certificate_types_descriptions/etcd-certificates.html
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-image-registry-operator\ImageRegistryStorageFull.md -->
+<!-- ========================================== -->
+
+# ImageRegistryStorageFull
+
+## Meaning
+
+This alert is triggered when the image registry pvc storage is full.
+
+## Impact
+
+Builds and direct pushes to the image registry will fail.
+
+Images imported via Image Streams or `oc import-image` will be served directly
+from the upstream registry where they are being imported from, but caching to
+local storage will fail imperceptibly to end-users, unless the upstream
+registry becomes unavailable.
+
+## Mitigation
+
+Review the [image pruner][imagePruner] parameters to ensure they suit your needs.
+
+If the image pruner is correctly configured to your needs, you will need more
+storage space for the image registry. Some storage solutions support volume
+expansion. Follow the [relevant documentation][volumeExpansion] for details.
+
+
+[imagePruner]: https://docs.openshift.com/container-platform/4.17/applications/pruning-objects.html#pruning-images_pruning-objects
+[volumeExpansion]: https://docs.openshift.com/container-platform/4.17/storage/expanding-persistent-volumes.html#add-volume-expansion_expanding-persistent-volumes
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-image-registry-operator\ImageRegistryStorageReadOnly.md -->
+<!-- ========================================== -->
+
+# ImageRegistryStorageReadOnly
+
+## Meaning
+
+This alert is triggered when the image registry pvc storage is read-only.
+
+## Impact
+
+Builds and direct pushes to the image registry will fail.
+
+Images imported via Image Streams or `oc import-image` will be served directly
+from the upstream registry where they are being imported from, but caching to
+local storage will fail imperceptibly to end-users, unless the upstream
+registry becomes unavailable.
+
+## Mitigation
+
+Ensure the PVC volume is not mounted to the image registry pod in `readOnly` mode.
+
+The underlying storage volume might also be configured as read-only. Ensure it's
+writable.
+
+Specific mitigation steps for this problem will differ depending on the underlying
+storage solution. Please refer to your specific storage solution's documentation.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-apiserver-operator\AuditLogError.md -->
+<!-- ========================================== -->
+
+# AuditLogError
+
+## Meaning
+
+This alert is triggered when an API Server instance in the cluster is unable
+to write audit logs. It fires when there's any errors, which is calculated
+by checking the error rate with `apiserver_audit_error_total` and `apiserver_audit_event_total`.
+
+There might be many causes to this:
+
+* This might have been caused by the node that host's that API Server instance
+  running out of disk space.
+
+* A malicious actor could be tampering with the audit log files or directory
+  permissions
+
+* The API server might be encountering an unexpected error.
+
+## Impact
+
+When there are errors writing audit logs, security events will not be logged
+by that specific API Server instance. Security Incident Response teams use
+these audit logs, amongst other artifacts, to determine the impact of
+security breaches or events. Without these logs, it becomes very difficult
+to assess a situation and do appropriate root cause analysis in such incidents.
+
+However, this is not detrimental to the cluster's availability.
+
+## Diagnosis
+
+Verify if there are other alerts being triggered, e.g. the
+`NodeFilesystemFillingUp` alert. This might indicate what's causing this error.
+
+The metric `apiserver_audit_error_total` will only show up on instances
+that are experiencing errors. There will be appropriate labels that indicate
+the API Server type and the specific instance that's affected.
+
+With this information, gather the runtime logs from that specific api server
+pod, and verify if the logs indicate an unexpected error.
+
+From the `instance` label, it's possible to determine what node is hosting
+the aforementioned affected API Server.
+
+Log into the appropriate node and Verify that the relevant audit log file
+permissions are what's expected:
+Owned by the `root` user and with a mode of `0600`. Make sure as well that
+there aren't unexpected attributes for the files, such as immutability or append-only.
+
+While logged into the appropriate node, also verify that the relevant audit
+log directory permissions are what's expected:
+Owned by the `root` user and with a mode of `0700`.
+
+If you suspect tampering is happening, contact your incident response team.
+
+## Mitigation
+
+The appropriate mitigation will be very different depending on the organization
+and the compliance requirements. A FedRAMP moderate deployment might need to
+isolate the node and investigate, while deployment with more strict compliance
+requirements would need to snapshot and shut down the system immediately.
+A more usual deployment might just need to investigate, and since the causes
+could be many. Regardless, investigate the deployment as described in the
+diagnosis, and contact the incident response team in your organization if
+necessary.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-apiserver-operator\ExtremelyHighIndividualControlPlaneCPU.md -->
+<!-- ========================================== -->
+
+# ExtremelyHighIndividualControlPlaneCPU
+
+## Meaning
+
+[This alert][ExtremelyHighIndividualControlPlaneCPU] is triggered when there
+is a sustained high CPU utilization on a single control plane node.
+
+The urgency of this alert is determined by how long the node is
+sustaining high CPU usage:
+
+* Critical
+  * when CPU usage on an individual control plane node is greater than
+    `90%` for more than `1h`.
+
+* Warning
+  * when CPU usage on an individual control plane node is greater than
+    `90%` for more than `5m`.
+
+
+[This alert][HighOverallControlPlaneCPU] is triggered when CPU utilization
+across all three control plane nodes is higher than two control plane nodes
+can sustain; a single control plane node outage may cause
+a cascading failure; increase available CPU.
+
+The urgency of this alert is determined by how long CPU utilization across all
+three control plane nodes is higher than two control plane nodes can sustain.
+
+* Warning
+  * when CPU utilization across all three control plane nodes is higher than
+    two control plane nodes can sustain for more than `10m`.
+  
+
+## Impact
+
+Extreme CPU pressure can cause slow serialization and poor performance from
+the `kube-apiserver` and `etcd`. When this happens, there is a risk of
+clients seeing non-responsive API requests which are issued again
+causing even more CPU pressure.
+
+It can also cause failing liveness probes due to slow etcd responsiveness on
+the backend. If one kube-apiserver fails under this condition, chances are
+you will experience a cascade as the remaining kube-apiservers
+are also under-provisioned.
+
+To fix this, increase the CPU and memory on your control plane nodes.
+
+## Diagnosis
+
+The following prometheus queries can be used to diagnose:
+```sh
+// Top 5 of containers with the most CPU utilization on a particular node
+topk(5,
+  sum by (namespace, pod, container) (
+    irate (container_cpu_usage_seconds_total{node="NODE_NAME",container!="",pod!=""}[4m])
+  )
+)
+
+// CPU utilization of containers on master nodes
+sum by (node) (
+  irate (container_cpu_usage_seconds_total{container!="",pod!=""}[4m])
+    and on (node) cluster:master_nodes
+)
+
+// CPU utilization of the master nodes from the cgroups
+sum by (node) (
+  1 - irate(
+    node_cpu_seconds_total{mode="idle"}[4m]
+  )
+  * on(namespace, pod) group_left(node) (
+    node_namespace_pod:kube_pod_info:
+  )
+  and on (node) (
+    cluster:master_nodes
+  )
+)
+
+// for Windows
+sum by (node) (
+  1 - irate(
+    windows_cpu_time_total{mode="idle", job="windows-exporter"}[4m]
+  )
+  and on (node) (
+    cluster:master_nodes
+  )
+)
+```
+
+These are the conditions that could trigger the alert:
+
+- there is a new workload that is generating more calls to the apiserver
+  and causing high CPU usage. In this case, increase the CPU and
+  memory on your control plane nodes.
+- the alert is triggered based on the node metrics, so it could be that a
+  component on the node is causing the high CPU usage.
+- apiserver/etcd is processing more requests due to client retries that is
+  being caused by an underlying condition.
+- uneven distribution of requests to the apiserver instance(s) due to http2
+  (it multiplexes requests over a single TCP connection). The load balancers
+  are not at application layer, and so does not understand http2.
+
+
+## Mitigation
+
+- if a workload is generating load to the apiserver that is causing high CPU
+  usage, then increase the CPU and memory on your control plane nodes.
+- If the sustained high CPU usage is due to a cluster degradation:
+
+  - find out the root cause of the degradation, and then
+    determine the next steps accordingly.
+
+If this needs to be reported, then capture the following dataset, and file
+a new issue in BugZilla with links to the captured dataset:
+
+- must-gather
+- audit logs
+- dump of prometheus data
+
+
+How to gather the audit logs of the cluster:
+```sh
+oc adm must-gather -- /usr/bin/gather_audit_logs
+```
+
+How to take a dump of the cluster prometheus data:
+```sh
+
+#!/usr/bin/env bash
+
+function queue() {
+  local TARGET="${1}"
+  shift
+  local LIVE
+  LIVE="$(jobs | wc -l)"
+  while [[ "${LIVE}" -ge 45 ]]; do
+    sleep 1
+    LIVE="$(jobs | wc -l)"
+  done
+  echo "${@}"
+  if [[ -n "${FILTER:-}" ]]; then
+    "${@}" | "${FILTER}" >"${TARGET}" &
+  else
+    "${@}" >"${TARGET}" &
+  fi
+}
+
+ARTIFACT_DIR=$PWD
+mkdir -p $ARTIFACT_DIR/metrics
+echo "Snapshotting prometheus (may take 15s) ..."
+queue ${ARTIFACT_DIR}/metrics/prometheus.tar.gz oc --insecure-skip-tls-verify exec -n openshift-monitoring prometheus-k8s-0 -- tar cvzf - -C /prometheus .
+FILTER=gzip queue ${ARTIFACT_DIR}/metrics/prometheus-target-metadata.json.gz oc --insecure-skip-tls-verify exec -n openshift-monitoring prometheus-k8s-0 -- /bin/bash -c "curl -G http://localhost:9090/api/v1/targets/metadata --data-urlencode 'match_target={instance!=\"\"}'"
+```
+
+
+[ExtremelyHighIndividualControlPlaneCPU]: https://github.com/openshift/cluster-kube-apiserver-operator/blob/master/bindata/assets/alerts/cpu-utilization.yaml
+[HighOverallControlPlaneCPU]: https://github.com/openshift/cluster-kube-apiserver-operator/blob/master/bindata/assets/alerts/cpu-utilization.yaml
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-apiserver-operator\KubeAPIDown.md -->
+<!-- ========================================== -->
+
+# KubeAPIDown
+
+## Meaning
+
+The `KubeAPIDown` alert is triggered when all Kubernetes API servers have not
+been reachable by the monitoring system for more than 15 minutes.
+
+## Impact
+
+This is a critical alert. It indicates that the Kubernetes API is not
+responding, and the cluster might be partially or fully non-functional.
+
+## Diagnosis
+
+1. Verify the status of the API server targets in Prometheus in the OpenShift
+web console.
+
+1. Confirm whether the API is also unresponsive:
+
+    ```console
+    $ oc cluster-info
+    ```
+
+1. If you can still reach the API server, a network issue might exist between
+the Prometheus instances and the API server pods. Review the status of the API
+server pods:
+
+    ```console
+    $ oc -n openshift-kube-apiserver get pods
+    $ oc -n openshift-kube-apiserver logs -l 'app=openshift-kube-apiserver'
+    ```
+## Mitigation
+
+If you can still reach the API server intermittently, you might be able to
+troubleshoot this issue as you would for any other failing deployment.
+
+If the API server is not reachable at all, refer to the disaster recovery
+documentation for your version of OpenShift.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-apiserver-operator\KubeAPIErrorBudgetBurn.md -->
+<!-- ========================================== -->
+
+# KubeAPIErrorBudgetBurn
+
+## Meaning
+
+[These alerts][KubeAPIErrorBudgetBurn] are triggered when the Kubernetes API
+server is encountering:
+
+* Many 5xx failed requests and/or
+* Many slow requests
+
+The urgency of these alerts is determined by the values of their `long` and
+`short` labels:
+
+* Critical
+  * `long`: 1h and `short`: 5m: less than ~2 days -- You should fix the problem
+as soon as possible!
+  * `long`: 6h and `short`: 30m: less than ~5 days -- Track this down now but no
+immediate fix required.
+* Warning
+  * `long`: 1d and `short`: 2h: less than ~10 days -- This is problematic in the
+long run. You should take a look in the next 24-48 hours.
+  * `long`: 3d and `short`: 6h: less than ~30 days -- (the entire window of the
+error budget) at this rate. This means that at the end of the next 30 days there
+won't be any error budget left at this rate. It's fine to leave this over the
+weekend and have someone take a look in the coming days at working hours.
+
+Information in this runbook is derived from the
+[upstream runbook][upstream runbook].
+
+Note that in OCP 4.8, these alerts have been [rewritten][alert PR], so they are
+no longer the same as the upstream ones.
+
+## Impact
+
+The overall availability of the cluster isn't guaranteed anymore. The API
+server is returning too many errors and/or responses are taking too long for
+guarantee reconciliation.
+
+## Diagnosis
+
+The following [recording rules][recording rules] can be used to determine the
+main contributors of the alerts, after adjusting their range to match the `long`
+and `short` labels of the active alerts:
+
+```sh
+# error
+label_replace(
+  sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",code=~"5.."}[1d]))
+/ scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET"}[1d])))
+, "type", "error", "_none_", "")
+or
+# resource-scoped latency
+label_replace(
+  (
+    sum(rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="resource"}[1d]))
+  -
+    (sum(rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="resource",le="0.1"}[1d])) or vector(0))
+  ) / scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec"}[1d])))
+, "type", "slow-resource", "_none_", "")
+or
+# namespace-scoped latency
+label_replace(
+  (
+    sum(rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="namespace"}[1d]))
+  - sum(rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="namespace",le="0.5"}[1d]))
+  ) / scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec"}[1d])))
+, "type", "slow-namespace", "_none_", "")
+or
+# cluster-scoped latency
+label_replace(
+  (
+    sum(rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",scope="cluster"}[1d]))
+    - sum(rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",scope="cluster",le="5"}[1d]))
+  ) / scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET"}[1d])))
+, "type", "slow-cluster", "_none_", "")
+```
+
+In this example, the `slow-resource` error type appears to be the main
+contributor to the alerts:
+
+![KubeAPIErrorBudgetBurn alert error types](img/kubeapierrorbudgetburn-error-types.png)
+
+Use the `slow-resource` query from the above recording rules to identify the
+resource kinds that contribute to the SLO violation:
+
+```sh
+sum by(resource) (rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="resource"}[1d]))
+-
+(sum by(resource) (rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="resource",le="0.1"}[1d])) or vector(0))
+/ scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec"}[1d])))
+```
+
+In this example, requests to the `apirequestcounts` resource kind appear to be
+the ones experiencing high latency:
+
+![KubeAPIErrorBudgetBurn slow resource](img/kubeapierrorbudgetburn-slow-resource.png)
+
+If accessible, the following Grafana dashboards will can also provide further
+insights into request duration and API server and etcd performance:
+
+* API Request Duration by Verb
+* etcd Request Duration - 99th Percentile
+* etcd Object Count
+* Request Duration by Read vs Write - 99th Percentile
+* Long Running Requests by Resource
+
+The following queries can be used individually to determine the resource kinds
+that contribute to the SLO violation once the main contributor has been
+identified.
+
+`error`:
+```sh
+sum by(resource) (rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",code=~"5.."}[1d]))
+/ scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET"}[1d])) or vector(0))
+```
+
+`slow-resource`:
+```sh
+sum by(resource) (rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="resource"}[1d]))
+-
+(sum by(resource) (rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="resource",le="0.1"}[1d])) or vector(0))
+/ scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec"}[1d])))
+```
+
+`slow-namespace`:
+```sh
+sum by(resource) (rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="namespace"}[1d]))
+-
+(sum by(resource) (rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec",scope="namespace",le="0.5"}[1d])) or vector(0))
+/ scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET",subresource!~"proxy|log|exec"}[1d])))
+```
+
+`slow-cluster`:
+```sh
+sum by(resource) (rate(apiserver_request_duration_seconds_count{job="apiserver",verb=~"LIST|GET",scope="cluster"}[1d]))
+-
+(sum by(resource) (rate(apiserver_request_duration_seconds_bucket{job="apiserver",verb=~"LIST|GET",scope="cluster",le="5"}[1d])) or vector(0))
+/ scalar(sum(rate(apiserver_request_total{job="apiserver",verb=~"LIST|GET"}[1d])))
+```
+
+## Mitigation
+
+### Restart the kubelet (after upgrade)
+
+If these alerts are triggered following a cluster upgrade, try restarting the
+kubelets per description [here][5420801].
+
+### Determine the source of the error or slow requests
+
+There isn't a straightforward way to identify the root causes, but in the past
+we were able to narrow down bugs by examining the failed resource counts in the
+audit logs.
+
+Gather the audit logs of the cluster:
+
+```sh
+oc adm must-gather -- /usr/bin/gather_audit_logs
+```
+
+Install the [cluster-debug-tools][cluster-debug-tools] as a kubectl/oc plugin.
+
+Use the `audit` subcommands to gather information on users that sends the
+requests, the resource kinds, the request verbs etc.
+
+E.g. to determine who generate the `apirequestcount` resource slow requests and
+what these requests are doing:
+
+```sh
+oc dev_tool audit -f ${kube_apiserver_audit_log_dir} -otop --by=user resource="apirequestcounts"
+
+oc dev_tool audit -f ${kube_apiserver_audit_log_dir} -otop --by=verb resource="apirequestcounts" --user=${top-user-from-last-command}
+```
+
+The `audit` subcommand also supports the `--failed-only` option which can be
+used to return failed requests only:
+
+```sh
+# find the top-10 users with the highest failed requests count
+oc dev_tool audit -f ${kube_apiserver_audit_log_dir} --by user --failed-only -otop
+
+# find the top-10 failed API resource calls of a specific user
+oc dev_tool audit -f ${kube_apiserver_audit_log_dir} --by resource --user=${service_account} --failed-only -otop
+
+# find the top-10 failed API verbs of a specific user on a specific resource
+oc dev_tool audit -f ${kube_apiserver_audit_log_dir} --by verb --user=${service_account} --resource=${resources} --failed-only -otop
+```
+
+When filing a new Bugzilla issue, be sure to attach this information and the
+audit logs to it.
+
+[alert PR]: https://github.com/openshift/cluster-kube-apiserver-operator/pull/1126
+[cluster-debug-tools]: https://github.com/openshift/cluster-debug-tools
+[KubeAPIErrorBudgetBurn]: https://github.com/openshift/cluster-kube-apiserver-operator/blob/622c08f101555be4584cb897f68f772777b32ada/bindata/v4.1.0/alerts/kube-apiserver-slos.yaml
+[recording rules]: https://github.com/openshift/cluster-kube-apiserver-operator/blob/c1c38912859e8b023a1da9168960e2c712068d5b/bindata/v4.1.0/alerts/kube-apiserver-slos.yaml#L234-L267
+[upstream runbook]: https://github.com/prometheus-operator/kube-prometheus/wiki/KubeAPIErrorBudgetBurn
+[5420801]: https://access.redhat.com/solutions/5420801
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-apiserver-operator\KubeAggregatedAPIErrors.md -->
+<!-- ========================================== -->
+
+# KubeAggregatedAPIErrors
+
+## Meaning
+
+The `KubeAggregatedAPIErrors` alert is triggered when multiple calls to the
+aggregated OpenShift API fail over a certain period of time.
+
+## Impact
+
+Aggregated API errors can result in the unavailability of some OpenShift
+services.
+
+## Diagnosis
+
+The alert message contains information about the affected API and the scope of
+the impact, as shown in the following sample:
+
+```text
+ - alertname = KubeAggregatedAPIErrors
+ - name = v1.packages.operators.coreos.com
+ - namespace = default
+...
+ - message = Kubernetes aggregated API v1.packages.operators.coreos.com/default has reported errors. It has appeared unavailable 5 times averaged over the past 10m.
+```
+
+## Mitigation
+
+Troubleshoot and fix the issue or issues causing the aggregated API errors by
+checking the availability status for each API and by verifying the
+authentication certificates for the aggregated API.
+
+### Check the availability status for each API
+
+At least four aggregated APIs exist in an OpenShift cluster:
+
+* the API for the `openshift-apiserver` namespace
+* the API for the `prometheus-adapter` in the namespace `openshift-monitoring`
+* the API for the the `package-server` service in the
+`openshift-operator-lifecycle-manager` namespace
+* the API for the `openshift-oauth-apiserver` namespace
+
+1. Check the availability of all APIs. To get a list of `APIServices` and their
+backing aggregated APIs, use the following command:
+
+    ```console
+    $ oc get apiservice
+    ```
+
+    The `SERVICE` column in the returned data shows the aggregated API name.
+    Normally, the availability status for every listed API will be shown as
+    `True`. If the status is `False`, it means that requests for that API
+    service, API server pods, or resources belonging to that `apiGroup` have
+    failed many times in the past few minutes.
+
+2. Fetch the pods that serve the unavailable API. For example, for
+`openshift-apiserver/api` use the following command:
+
+    ```console
+    $ oc get pods -n openshift-apiserver
+    ```
+
+    If the status is not shown as `Running`, review the logs for more details.
+    Because these pods are controlled by a deployment, they can be restarted
+    when they do not respond to requests.
+
+### Verify the authentication certificates for the aggregated API
+
+1. Verify that the certificates have not expired and are still valid:
+
+    ```console
+    $ oc get configmaps -n kube-system extension-apiserver-authentication
+    ```
+
+    If required, you can save these certificates to a file and use the following
+    command to check the expiration dates for each certificate file:
+
+    ```console
+    $ openssl x509 -noout -enddate -in {myfile_with_certs.crt}
+    ```
+
+    The aggregated APIs use these certificates to validate requests. If
+    they are expired, see [the OpenShift documentation][cert] for information
+    about how to add a new certificate.
+
+[cert]: https://docs.openshift.com/container-platform/latest/security/certificates/api-server.html
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-controller-manager-operator\GarbageCollectorSyncFailed.md -->
+<!-- ========================================== -->
+
+# GarbageCollectorSyncFailed
+
+## Meaning
+
+[This alert][GarbageCollectorSyncFailed] is fired when some resources couldn't
+be reached for a garbage collector informer cache. This usually happens due to
+the failing conversion webhook of an installed `CustomResourceDefinition` (CRD)
+or because of failing API Discovery, unreachable API server or problems with a
+network.
+
+## Impact
+
+Garbage collection and orphaning of objects stops working. Normal deletion
+works fine, but deletion of objects via owner references does not.
+Deletion of an object with `--cascade=orphan` option also does not work.
+
+This can lead to resource exhaustion or/and etcd pollution
+when objects are not garbage collected.
+
+For example:
+- deletion of replica set will not delete its pods and the pods will keep
+  running
+- cron job with history limit that create new jobs will delete old jobs,
+  but it will lead to leaving completed pods behind
+
+In extreme cases this can lead to cluster failure.
+
+
+## Diagnosis
+
+Analyze logs of `kube-controller-manager` pods in
+`openshift-kube-controller-manager` namespace.
+
+```console
+$ oc get pods -n openshift-kube-controller-manager
+$ oc logs -n openshift-kube-controller-manager $POD
+```
+
+Look for lines with `garbagecollector` or `garbage` words.
+You should see something similar to this.
+
+```text
+shared_informer.go:258] unable to sync caches for garbage collector
+garbagecollector.go:245] timed out waiting for dependency graph builder sync during GC sync (attempt 26)
+garbagecollector.go:215] syncing garbage collector with updated resources from discovery (attempt 27): added: [example.com/v1, Resource=myresource], removed: []
+```
+
+If you cannot identify the failing resource,
+increase the log level to get more information.
+
+```console
+$ oc patch kubecontrollermanagers.operator/cluster --type=json -p '[{"op": "replace", "path": "/spec/logLevel", "value": "LOGLEVEL" }]'
+```
+
+After the kube-controller-manager pods restart,
+you should find following messages in logs.
+
+```console
+graph_builder.go:279] garbage controller monitor not yet synced: example.com/v1, Resource=myresource
+```
+
+
+## Mitigation
+
+Debug your CRD (in this example `myresource.example.com`) to see what is wrong.
+Fix or disable the conversion webhooks of your CRD to get garbage collector
+back to functioning state. You can also remove the CRD in case you are not
+using it. Usually this is caused by improper CRD installation or upgrade.
+For more details see [Versions in CRDs][VersionsCustomResourceDefinitions].
+
+You might also see network errors in kube-controller-manager logs.
+In that case there is probably an issue with your infrastructure.
+
+[GarbageCollectorSyncFailed]: https://github.com/openshift/cluster-kube-controller-manager-operator/blob/20179ecfa3b8c5e766a21c98107f45b84196b914/manifests/0000_90_kube-controller-manager-operator_05_alerts.yaml#L42-L50
+[VersionsCustomResourceDefinitions]: https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-controller-manager-operator\KubeControllerManagerDown.md -->
+<!-- ========================================== -->
+
+# KubeControllerManagerDown
+
+## Meaning
+
+[This alert][KubeControllerManagerDown] is fired when KubeControllerManager
+has disappeared from Prometheus target discovery.
+This means there is no running or properly functioning
+instance of [kube-controller-manager][kube-controller-manager].
+
+## Impact
+
+Many features stop working when kube-controller-manager is down.
+
+This includes:
+- workload controllers (Deployment, ReplicaSet, DaemonSet, ...)
+- resource quotas
+- pod disruption budgets
+- garbage collection
+- certificate signing requests
+- service accounts, tokens
+- storage
+- nodes' statuses and taints
+- SCCs
+- and more...
+
+
+## Diagnosis
+
+To see an operator status of kube-controller-manager.
+
+```console
+$ oc get clusteroperators.config.openshift.io kube-controller-manager
+```
+
+Take a look at `KubeControllerManager`'s `.status.conditions` and
+also see what is the current state of each instance of kube-controller-manager
+on each node in `.status.nodeStatuses`.
+
+```console
+$ oc get -o yaml kubecontrollermanagers.operator.openshift.io cluster
+```
+
+See operator events.
+
+```console
+$ oc get events -n openshift-kube-controller-manager-operator
+```
+
+Look at the operator pod and inspect its logs.
+
+```console
+$ oc get pods -n openshift-kube-controller-manager-operator
+$ oc logs -n openshift-kube-controller-manager-operator $POD_NAME
+```
+
+You can do the same with kube-controller-manager.
+
+See kube-controller-manager events.
+
+```console
+$ oc get events -n openshift-kube-controller-manager
+```
+
+Look at kube-controller-manager pods and inspect their logs.
+
+```console
+$ oc get pods -n openshift-kube-controller-manager
+$ oc logs -n openshift-kube-controller-manager $POD_NAME
+```
+
+
+## Mitigation
+
+The resolution depends on the particular issue reported in the statuses,
+events and logs.
+
+
+[KubeControllerManagerDown]: https://github.com/openshift/cluster-kube-controller-manager-operator/blob/20179ecfa3b8c5e766a21c98107f45b84196b914/manifests/0000_90_kube-controller-manager-operator_05_alerts.yaml#L14-L23
+[kube-controller-manager]: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-controller-manager/
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-controller-manager-operator\PodDisruptionBudgetAtLimit.md -->
+<!-- ========================================== -->
+
+# PodDisruptionBudgetAtLimit
+
+## Meaning
+
+[This alert][PodDisruptionBudgetAtLimit] is fired when the pod disruption
+budget is at the minimum disruptions allowed level.
+This level is defined by `.spec.minAvailable` or `.spec.maxUnavailable` in
+the `PodDisruptionBudget` object.
+The number of current healthy pods is equal to the desired healthy pods.
+
+It does not fire when the number of expected pods is 0.
+
+
+## Impact
+
+the application protected by the pod disruption budget has a sufficient amount
+of pods, but is at risk of getting disrupted.
+
+Standard workloads should have at least one pod more than is desired to support
+[API-initiated eviction][APIEviction]. Workloads that are at the minimum
+disruption allowed level violate this and could block node drain.
+This is important for node maintenance and cluster upgrades.
+
+## Diagnosis
+
+Discover the pod disruption budgets that are triggering the alert.
+
+```console
+max by(namespace, poddisruptionbudget) (
+    kube_poddisruptionbudget_status_current_healthy == kube_poddisruptionbudget_status_desired_healthy
+      and on (namespace, poddisruptionbudget) kube_poddisruptionbudget_status_expected_pods > 0
+)
+```
+
+Look at the [pod disruption budget][SpecifyingPDB] detail.
+
+```console
+$ oc get poddisruptionbudgets -o yaml -n $NS $PDB_NAME
+```
+
+Look at events for reasons why your extra pods might not be healthy.
+
+```console
+$ oc get events -n $NS
+```
+
+
+## Mitigation
+
+Get the selector from the pod disruption budget YAML and see if there are
+any extra pods of this application that are not healthy.
+You can debug these pods to find a reason why.
+
+```console
+$ oc get pods -n $NS --selector="app=myapp"
+```
+
+In general ensure you have enough resource for running your pods.
+You can also take a look at potential reasons
+for [pod disruptions][PodDisruptions].
+
+Finally, take a look at the owner references of these pods to either change
+the pod YAML or number of replicas in the parent workload resource to fix
+the issue.
+
+
+[PodDisruptionBudgetAtLimit]: https://github.com/openshift/cluster-kube-controller-manager-operator/blob/20179ecfa3b8c5e766a21c98107f45b84196b914/manifests/0000_90_kube-controller-manager-operator_05_alerts.yaml#L24-L32
+[PodDisruptions]: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+[SpecifyingPDB]: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+[APIEviction]: https://kubernetes.io/docs/concepts/scheduling-eviction/api-eviction/
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-controller-manager-operator\PodDisruptionBudgetLimit.md -->
+<!-- ========================================== -->
+
+# PodDisruptionBudgetLimit
+
+## Meaning
+
+[This alert][PodDisruptionBudgetLimit] is fired when the pod disruption budget
+is below the minimum disruptions allowed level and is not satisfied.
+This level is defined by `.spec.minAvailable` or `.spec.maxUnavailable` in
+the `PodDisruptionBudget` object.
+The number of current healthy pods is less than the desired healthy pods.
+
+
+## Impact
+
+The application protected by the pod disruption budget has an insufficient
+amount of pods.
+This means the application is either not running at all or running with
+suboptimal number of pods.
+This can have various impact depending on the type and importance of such
+application.
+
+Standard workloads should have at least one pod more than is desired to support
+[API-initiated eviction][APIEviction]. Workloads that are below the minimum
+disruption allowed level violate this and could block node drain.
+This is important for node maintenance and cluster upgrades.
+
+
+## Diagnosis
+
+Discover the pod disruption budgets that are triggering the alert.
+
+```console
+max by(namespace, poddisruptionbudget) (
+    kube_poddisruptionbudget_status_current_healthy < kube_poddisruptionbudget_status_desired_healthy
+)
+```
+
+Look at the [pod disruption budget][SpecifyingPDB] detail to see how many pods
+are healthy and how many are desired.
+
+```console
+$ oc get poddisruptionbudgets -o yaml -n $NS $PDB_NAME
+```
+
+Look at events for reasons why your pods are not healthy.
+
+```console
+$ oc get events -n $NS
+```
+
+
+## Mitigation
+
+Get the selector from the pod disruption budget YAML and debug the pods
+of the application to find a reason why they are not healthy.
+
+```console
+$ oc get pods -n $NS --selector="app=myapp"
+```
+
+In general ensure you have enough resource for running your pods.
+You can also take a look at potential reasons
+for [pod disruptions][PodDisruptions].
+
+Finally, take a look at the owner references of these pods to either change
+the pod YAML or number of replicas in the parent workload resource to fix
+the issue.
+
+
+[PodDisruptionBudgetLimit]: https://github.com/openshift/cluster-kube-controller-manager-operator/blob/20179ecfa3b8c5e766a21c98107f45b84196b914/manifests/0000_90_kube-controller-manager-operator_05_alerts.yaml#L33-L41
+[PodDisruptions]: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+[SpecifyingPDB]: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+[APIEviction]: https://kubernetes.io/docs/concepts/scheduling-eviction/api-eviction/
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-descheduler-operator\DeschedulerPSIDisabled.md -->
+<!-- ========================================== -->
+
+# DeschedulerPSIDisabled
+
+## Meaning
+
+This alert indicates that the Kube Descheduler Operator
+is configured with a profile that requires PSI metrics (such as `KubeVirtRelieveAndMigrate`),
+but PSI is not enabled on the worker nodes.
+
+Pressure Stall Information (PSI) is a Linux kernel feature that quantifies
+system saturation by tracking exactly how long tasks are stalled waiting for
+CPU, memory, or I/O resources. The `KubeVirtRelieveAndMigrate` profile uses
+these metrics to detect nodes under resource pressure and migrate workloads
+to relieve them.
+
+## Impact
+
+The `KubeVirtRelieveAndMigrate` profile requires PSI metrics to be enabled
+on all worker nodes. Without this, the descheduler cannot accurately detect
+resource pressure or perform migrations to relieve overloaded nodes.
+
+## Diagnosis
+
+To confirm that PSI is disabled on your worker nodes, perform the following checks:
+
+1. **Check for the PSI Interface**
+   PSI metrics are exposed via the `/proc/pressure` directory.
+   If this directory does not exist, PSI is disabled.
+
+   * Open a debug session on a worker node:
+        ```bash
+        oc debug node/<node-name>
+        ```
+   * Once the debug pod starts, check for the existence of the pressure files:
+        ```bash
+        ls -l /host/proc/pressure/
+        ```
+   * **Result:** If you receive `No such file or directory`, PSI is **disabled**.
+   * **Result:** If you see files like `cpu`, `io`, and `memory`, PSI is **enabled**.
+
+2. **Verify Kernel Arguments**
+   Check if the kernel was booted with the necessary arguments.
+   * Still in the debug session, run:
+       ```bash
+       cat /host/proc/cmdline | grep psi
+       ```
+   * **Result:** If the output is empty or does not contain `psi=1`,
+   the kernel argument is missing.
+
+## Mitigation
+
+PSI metrics can be enabled on worker nodes using a Machine Config.
+
+**Note:** Applying this MachineConfig custom resource (CR) will trigger
+a rolling reboot of your nodes.
+
+```yaml
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 99-openshift-machineconfig-worker-psi-karg
+spec:
+  kernelArguments:
+    - psi=1
+```
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-kube-scheduler-operator\KubeSchedulerDown.md -->
+<!-- ========================================== -->
+
+# KubeSchedulerDown
+
+## Meaning
+
+[This alert][KubeSchedulerDown] is fired when the kube-scheduler pods
+has disappeared from Prometheus target discovery.
+This means there is no running or properly functioning
+instance of [kube-scheduler][kube-scheduler].
+
+## Impact
+
+The cluster is unable to schedule new pods. Newly created pods will stay
+in the Pending state until the kube-scheduler is running properly again.
+
+## Diagnosis
+
+To see an operator status of kube-scheduler.
+
+```console
+$ oc get clusteroperators.config.openshift.io kube-scheduler
+```
+
+Take a look at `KubeScheduler`'s `.status.conditions` and
+also see what is the current state of each instance of kube-scheduler
+on each node in `.status.nodeStatuses`.
+
+```console
+$ oc get -o yaml kubeschedulers.operator.openshift.io cluster
+```
+
+See operator events.
+
+```console
+$ oc get events -n openshift-kube-scheduler-operator
+```
+
+Look at the operator pod and inspect its logs.
+
+```console
+$ oc get pods -n openshift-kube-scheduler-operator
+$ oc logs -n openshift-kube-scheduler-operator $POD_NAME
+```
+
+You can do the same with kube-scheduler.
+
+See kube-scheduler events.
+
+```console
+$ oc get events -n openshift-kube-scheduler
+```
+
+Look at kube-scheduler pods and inspect their logs.
+
+```console
+$ oc get pods -n openshift-kube-scheduler
+$ oc logs -n openshift-kube-scheduler $POD_NAME
+```
+
+
+## Mitigation
+
+Since this alert indicates that the control-plane is not functioning
+and is unlikely to self-heal, the manual intervention required depend
+heavily on the exact scenario.
+The status and log insights gained from the Diagnosis section provide
+the needed insight. The kube-scheduler pods need to advance
+to the Running state in order to mitigate this alert.
+
+[KubeSchedulerDown]: https://github.com/openshift/cluster-kube-scheduler-operator/blob/98d1828fb44fb78abf2e090825404a98cd8a4e22/manifests/0000_90_kube-scheduler-operator_03_servicemonitor.yaml#L47-L56
+[kube-scheduler]: https://kubernetes.io/docs/reference/command-line-tools-reference/kube-scheduler/
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-logging-operator\ClusterLogForwarderConfigNamingSchema.md -->
+<!-- ========================================== -->
+
+# Naming schemas
+
+This document identifies the schema used by the `cluster-logging-operator` to
+generate the configuration for the log collector from a `ClusterLogForwarder` instance.
+
+## Outputs
+
+### Non-Lokistack Outputs
+
+The naming schema is `output_<OUTPUT_NAME>`,
+where the `<OUTPUT_NAME>` corresponds to the CLF's named output, with all
+punctuations replaced by underscores
+(e.g., `output_my_splunk` will correspond to a CLF output named `my-splunk`).
+
+### Lokistack Outputs
+
+The naming schema is `output_<OUTPUT_NAME>_<INPUT_TYPE>`,
+where the `<OUTPUT_NAME>` corresponds to the CLF's named Lokistack output,
+with all punctuations replaced by underscores and `<INPUT_TYPE>` is the tenant.
+(e.g `output_my_lokistack_application` will correspond to a CLF output named
+`my-lokistack` receiving `application` logs.)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-logging-operator\ClusterLogForwarderOutputErrorRate.md -->
+<!-- ========================================== -->
+
+# ClusterLogForwarderOutputErrorRate
+
+## Meaning
+
+The `ClusterLogForwarderOutputErrorRate` alert indicates that the log collector
+is experiencing a sustained error rate (at least 10% over the last 5 minutes,
+persisting for 5 minutes) while trying to forward logs to a specific Output.
+The alert identifies error for the specific output of the specific instance of
+a ClusterLogForwarder.  Typically, this indicates a misconfiguration of the
+`ClusterLogForwarder` or the service destination is unavailable.
+
+## Impact
+
+Log forwarding to the destination is impaired and may result in data loss at
+the configured log store.
+
+## Diagnosis
+
+1. Examine `ClusterLogForwarderOutputErrorRate` alert details in the OpenShift
+console:
+    - Note the error being generated by the collector
+      - (i.e. "error trying to connect: dns error: failed to lookup address
+        information: Name or service not known")
+    - Note the key labels:
+        - `app_kubernetes_io_instance`: The name of the collector.
+        - `namespace`: Namespace of the collector.
+        - `component_id`: The ID of the specific sink in the log collector
+        that is failing
+        (i.e `output_lokistack_otlp_application`, `output_my_splunk`).
+2. Review the `ClusterLogForwarder` (CLF) configuration:
+    1. Identify the output definition corresponding to the `component_id`
+    obtained from the alert details.
+        - See naming schemas for
+        [non-Lokistack](./ClusterLogForwarderConfigNamingSchema.md#non-lokistack-outputs)
+        and
+        [Lokistack](./ClusterLogForwarderConfigNamingSchema.md#lokistack-outputs)
+        outputs.
+3. Verify the log receiver:
+    - Verify the service is available.
+    - Verify the authorization credentials.
+4. Verify the `ClusterLogForwarder`
+    - Verify the URL of the output is correct for the service
+    - Verify the TLS configuration is correct for the service by inspecting the
+     spec'd secrets and configmaps
+    - Verify the authorization credentials are correct for the service by inspecting
+    the spec'd secrets
+
+## Mitigation
+
+Mitigation of the issue depends upon the error message displayed by the alert.
+The steps identified below are not all inclusive for this alert.
+
+### ClusterLogForwarder Configuration
+
+If a typo or misconfiguration is identified within the
+CLF custom resource, directly edit the resource to fix the error.
+
+### Credential Update
+
+If the issue stems from incorrect or expired authentication
+credentials, update the associated OpenShift `Secret` with the correct and valid
+credentials.
+
+### TLS Certificate Update
+
+If the issue stems from incorrect or expired certicates, update the associated
+OpenShift `Secret` or `ConfigMap` with the correct and valid certificates.
+
+## Notes
+
+- [Naming schemas](./ClusterLogForwarderConfigNamingSchema.md)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-logging-operator\CollectorHigh403ForbiddenResponseRate.md -->
+<!-- ========================================== -->
+
+# CollectorHigh403ForbiddenResponseRate
+
+## Meaning
+
+The `CollectorHigh403ForbiddenResponseRate` alert indicates that the log collector
+is experiencing a sustained high rate (at least 10% over the last 2 minutes, persisting
+for 5 minutes) of **HTTP 403 Forbidden** responses when attempting to send log
+data to its configured log store.
+
+An **HTTP 403 Forbidden** response indicates that the server understood the request
+but refuses to authorize it.
+
+## Impact
+
+Log collection and forwarding to the destination are impaired,
+resulting in data loss at the configured log store.
+
+## Diagnosis
+
+1. Examine `CollectorHigh403ForbiddenResponseRate` alert details in the OpenShift
+console:
+    - Note the key labels:
+        - `app_kubernetes_io_instance`: The name of the collector.
+        - `namespace`: Namespace of the collector.
+        - `component_id`: The ID of the specific sink in `Vector` that's failing
+        (i.e `output_lokistack_otlp_application`, `output_my_splunk`).
+2. Review the `ClusterLogForwarder` (CLF) configuration:
+    1. Identify the output definition corresponding to the `component_id`
+    obtained from the alert details.
+        - See naming schemas for
+        [non-Lokistack](./ClusterLogForwarderConfigNamingSchema.md#non-lokistack-outputs)
+        and
+        [Lokistack](./ClusterLogForwarderConfigNamingSchema.md#lokistack-outputs)
+        outputs.
+    2. Examine the secret or authentication fields defined for the affected output.
+3. Validate authentication credentials in the identified secrets:
+    - Identify the Kubernetes `Secret` object referenced by the affected CLF
+      output.
+    - Verify the following:
+        1. The `Secret` object exists in the specified namespace.
+        2. The expected keys (e.g., token, password, etc.) are
+        present and contain valid, non-empty values.
+4. Verify log store authorization with the provided credentials.
+    - Confirm that the credentials provided in the identified Secret possess the
+    necessary permissions (i.e write) to the target log store.
+
+### Diagnosis for Red Hat Managed Lokistack
+
+#### Verify `ClusterRole`'s Existence
+
+Confirm the presence of the `ClusterRole` named `logging-collector-logs-writer`
+within the cluster. This `ClusterRole` is provisioned during the deployment
+of the `Cluster Logging Operator`.
+The `ClusterRole` is not managed by any operator.
+
+##### Query for the `ClusterRole`
+
+```bash
+oc get clusterrole logging-collector-logs-writer
+```
+
+#### Validate `ClusterRoleBinding`
+
+Ensure the CLF's associated `ServiceAccount` is correctly
+bound to the `logging-collector-logs-writer` `ClusterRole`.
+
+##### Query for the `ServiceAccount` associated with the CLF
+
+```bash
+oc get clusterlogforwarder <CR-NAME> -o jsonpath='{.spec.serviceAccount}' -n <NAMESPACE>
+```
+
+##### Query for the `ClusterRoles` that the `ServiceAccount` is bound to
+
+```bash
+oc get clusterrolebinding -o json | jq -r 'try .items[]? | select(.subjects[].name=="<SERVICEACCOUNT>").roleRef.name'
+```
+
+## Mitigation
+
+### Credential Update
+
+If the issue stems from incorrect or expired authentication
+credentials, update the associated OpenShift `Secret` with the correct and valid
+credentials.
+
+### CLF Configuration
+
+If a typo or misconfiguration is identified within the
+CLF custom resource, directly edit the resource to fix the error.
+
+### External Log Store Authorization
+
+Work with the external log store's
+administrator to ensure the provided credentials have the proper permissions
+(i.e write).
+This typically involves adjusting roles or access policies.
+
+### Red Hat Managed Lokistack
+
+For Red Hat managed Lokistack deployments, ensure
+the `logging-collector-logs-writer` `ClusterRole` exists and that the `ServiceAccount`
+is bound to the `ClusterRole`.
+
+#### Check existence of `logging-collector-logs-writer` `ClusterRole`
+
+```bash
+oc get clusterrole logging-collector-logs-writer
+```
+
+If `ClusterRole` is absent there are two options:
+
+1. Redeploy the `Cluster Logging Operator`.
+
+2. Manually create the `logging-collector-logs-writer` `ClusterRole` using the
+[upstream CLO ClusterRole manifest](https://github.com/openshift/cluster-logging-operator/blob/master/bundle/manifests/logging-collector-logs-writer_rbac.authorization.k8s.io_v1_clusterrole.yaml).
+
+   ```bash
+   oc create -f bundle/manifests/logging-collector-logs-writer_rbac.authorization.k8s.io_v1_clusterrole.yaml
+   ```
+
+#### Binding the `ServiceAccount` to the `logging-collecor-logs-writer` `ClusterRole`
+
+1. Query for the `ServiceAccount` associated with the CLF:
+
+   ```bash
+   oc get clusterlogforwarder <CR-NAME> \
+     -o jsonpath='{.spec.serviceAccount}' -n <NAMESPACE>
+   ```
+
+2. Inspect which `ClusterRoles` the `ServiceAccount` is bound to:
+
+   ```bash
+   oc get clusterrolebinding -o json | jq -r 'try .items[]? | select(.subjects[].name=="<SERVICEACCOUNT>").roleRef.name'
+   ```
+
+   If the `ServiceAccount` is not bound to the `logging-collecor-logs-writer`
+   `ClusterRole`:
+
+3. Bind `ServiceAccount` to `ClusterRole`
+
+   ```bash
+   oc adm policy add-cluster-role-to-user \
+     logging-collector-logs-writer -z <SA-NAME> -n <SA-NAMESPACE>
+   ```
+
+## Notes
+
+- [Naming schemas](./ClusterLogForwarderConfigNamingSchema.md)
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-logging-operator\CollectorNodeDown.md -->
+<!-- ========================================== -->
+
+# CollectorNodeDown
+
+## Meaning
+
+The `CollectorNodeDown` alert indicates that Prometheus is unable to scrape
+metrics from a log collector pod for more than 10 minutes. This means the
+collector's metrics endpoint is unreachable, which could indicate that the
+collector pod is down, has crashed, is experiencing network connectivity issues,
+or its metrics port is not responding.
+
+## Impact
+
+When this alert fires, the following impacts may occur:
+
+- **Loss of observability:** Metrics for log collection, forwarding rates, and
+error rates are unavailable, making it impossible to monitor collector health
+and performance.
+- **Potential log data loss:** If the collector is actually down (not just
+unreachable by Prometheus), logs are not being collected or forwarded to their
+destinations.
+- **Inability to detect other issues:** Without metrics, other collector-related
+alerts (such as `ClusterLogForwarderOutputErrorRate`, `DiskBufferUsage`, or
+`CollectorHigh403ForbiddenResponseRate`) cannot fire, masking additional problems.
+
+## Diagnosis
+
+1. **Check if the collector pod is running:**
+
+   ```bash
+   oc get pods -n openshift-logging -l app.kubernetes.io/component=collector
+   ```
+
+   Look for pods in a non-Running state (e.g., `CrashLoopBackOff`, `Error`,
+   `Pending`).
+
+2. **Examine pod status and recent events:**
+
+   ```bash
+   oc describe pod <POD_NAME> -n openshift-logging
+   ```
+
+   Check the "Events" section for errors such as:
+   - Image pull failures
+   - Resource constraints (CPU, memory)
+   - Volume mount issues
+   - Liveness/readiness probe failures
+
+3. **Review pod logs for errors:**
+
+   ```bash
+   oc logs <POD_NAME> -n openshift-logging
+   ```
+
+   Look for startup errors, configuration issues, or crash messages.
+
+4. **Verify the metrics endpoint is accessible:**
+
+   If the pod is running, test if the metrics endpoint responds:
+
+   ```bash
+   oc exec <POD_NAME> -n openshift-logging -- curl -s http://localhost:24231/metrics
+   ```
+
+   The collector typically exposes metrics on port 24231. If this command fails
+   or times out, the metrics server within the collector is not functioning.
+
+5. **Check network policies:**
+
+   Verify that network policies allow Prometheus to scrape the collector:
+
+   ```bash
+   oc get networkpolicies -n openshift-logging
+   ```
+
+   Ensure policies permit ingress traffic from the monitoring namespace (typically
+   `openshift-monitoring`) to the collector pods on the metrics port.
+
+6. **Check ServiceMonitor configuration:**
+
+   Verify the ServiceMonitor for the collector exists and is correctly configured:
+
+   ```bash
+   oc get servicemonitor -n openshift-logging
+   oc describe servicemonitor <SERVICEMONITOR_NAME> -n openshift-logging
+   ```
+
+   Ensure the ServiceMonitor's selector matches the collector service labels.
+
+7. **Check the collector service:**
+
+   Verify the service exists and has endpoints:
+
+   ```bash
+   oc get service -n openshift-logging -l app.kubernetes.io/component=collector
+   oc get endpoints -n openshift-logging -l app.kubernetes.io/component=collector
+   ```
+
+   If the endpoints list is empty, the service selector may not match the pod labels.
+
+## Mitigation
+
+The following examples assume the collector is deployed to the 'openshift-logging'
+namespace
+
+### Restart Unhealthy Pods
+
+If the collector pod is in a failed state (`CrashLoopBackOff`, `Error`), delete
+it to trigger a restart:
+
+```bash
+oc delete pod <POD_NAME> -n openshift-logging
+```
+
+The DaemonSet or Deployment will automatically recreate the pod.
+
+### Check Resource Constraints
+
+If pod events indicate resource issues (e.g., "Pod OOMKilled"), check resource
+limits and node capacity:
+
+1. Review the pod's resource requests and limits:
+
+   ```bash
+   oc get pod <POD_NAME> -n openshift-logging -o jsonpath='{.spec.containers[*].resources}'
+   ```
+
+2. Check node resource availability:
+
+   ```bash
+   oc describe node <NODE_NAME>
+   ```
+
+3. If necessary, adjust the collector's resource limits in the
+   `ClusterLogForwarder` custom resource.
+
+### Verify ClusterLogForwarder Configuration
+
+If the collector is failing to start due to configuration errors:
+
+1. Review the `ClusterLogForwarder` custom resource:
+
+   ```bash
+   oc get clusterlogforwarder -A
+   oc describe clusterlogforwarder <NAME> -n <NAMESPACE>
+   ```
+
+2. Check the generated collector configuration for errors:
+
+   ```bash
+   oc get configmap <COLLECTOR_CONFIG_MAP> -n openshift-logging -o yaml
+   ```
+
+3. Correct any configuration issues and the collector should restart automatically.
+
+NOTE: Manual corrections to the configuration should be reported as an issue to
+Red Hat against the cluster-logging-operator
+
+### Check for Node-Level Issues
+
+If the collector pod cannot be scheduled or is stuck in `Pending`:
+
+1. Verify the node is ready:
+
+   ```bash
+   oc get nodes
+   ```
+
+2. Check for node taints that might prevent scheduling:
+
+   ```bash
+   oc describe node <NODE_NAME> | grep -i taint
+   ```
+
+3. Ensure the node has sufficient resources (CPU, memory, disk) to run the
+   collector pod.
+
+### Network Connectivity Issues
+
+If the pod is running but Prometheus cannot reach it:
+
+1. Verify the metrics port is exposed in the pod specification.
+2. Check for network policies blocking traffic from the `openshift-monitoring`
+   namespace.
+3. Ensure the Service and ServiceMonitor configurations are correct.
+
+## Notes
+
+- The collector is typically deployed as a DaemonSet, so there should be one
+  collector pod per node in the cluster.
+- The default metrics port for the collector is 24231.
+- This alert specifically monitors the `up` metric with labels
+  `app_kubernetes_io_component = "collector"` and
+  `app_kubernetes_io_part_of = "cluster-logging"`.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\AlertmanagerClusterFailedToSendAlerts.md -->
+<!-- ========================================== -->
+
+# AlertmanagerClusterFailedToSendAlerts
+
+## Meaning
+
+The alert `AlertmanagerClusterFailedToSendAlerts` is triggered when all
+Alertmanager instances in a cluster have consistently failed to send
+notifications to an integration.
+
+## Impact
+
+Some notifications are not delivered to the integration.
+
+## Diagnosis
+
+Review the logs of the `alertmanager-main` pods in the `openshift-monitoring`
+namespace by running:
+
+```console
+$ oc -n openshift-monitoring logs -l 'alertmanager=main'
+```
+
+The following reasons might cause this alert to fire:
+
+- The endpoint is not reachable.
+- The endpoint's URL or credentials are misconfigured.
+
+## Mitigation
+
+How you resolve the problem causing the alert to fire depends on the particular
+issue reported in the logs.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\AlertmanagerFailedReload.md -->
+<!-- ========================================== -->
+
+# AlertmanagerFailedReload
+
+## Meaning
+
+The alert `AlertmanagerFailedReload` is triggered when the Alertmanager instance
+for the cluster monitoring stack has consistently failed to reload its
+configuration for a certain period of time.
+
+## Impact
+
+Alerts for cluster components may not be delivered as expected.
+
+## Diagnosis
+
+1. Determine whether the alert has triggered for the instance of Alertmanager used
+   for default cluster monitoring or for the instance that monitors user-defined
+   projects by viewing the alert message's `namespace` label:
+   - The namespace for default cluster monitoring is `openshift-monitoring`.
+   - The namespace for user workload monitoring is `openshift-user-workload-monitoring`.
+
+2. Check the logs for the Alertmanager pods:
+
+```console
+$ NAMESPACE='<value of namespace label from alert>'
+
+$ oc -n $NAMESPACE logs -l 'app.kubernetes.io/name=alertmanager' --tail=-1 | \
+grep 'Loading configuration file failed.*' \
+| sort | uniq -c | sort -n
+time=2025-04-18T07:28:00.274Z level=ERROR source=coordinator.go:117 msg="Loading configuration file failed" component=configuration file=/etc/alertmanager/config_out/alertmanager.env.yaml err="address smtp.gmail.com: missing port in address"
+```
+
+## Mitigation
+
+The resolution depends on the particular issue reported in the logs.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\AlertmanagerFailedToSendAlerts.md -->
+<!-- ========================================== -->
+
+# AlertmanagerFailedToSendAlerts
+
+## Meaning
+
+The alert `AlertmanagerFailedToSendAlerts` is triggered when any of the
+Alertmanager instances in the cluster monitoring stack has repeatedly
+failed to send notifications to an integration.
+
+## Impact
+
+Some alert notifications are not delivered.
+
+## Diagnosis
+
+Review the logs for the pod in the namespace indicated in the alert message.
+
+For example, the following sample alert message refers to the
+`alertmanager-main-1` pod in the `openshift-monitoring` namespace:
+
+> Alertmanager openshift-monitoring/alertmanager-main-1 failed to send 75%
+> of notifications to webhook.
+
+You can review the logs for the `alertmanager-main-1` pod in the
+`openshift-monitoring` namespace by running the following command:
+
+```console
+$ oc -n openshift-monitoring logs alertmanager-main-1
+```
+
+## Mitigation
+
+The resolution depends on the particular issue reported in the logs.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\ClusterMonitoringOperatorDeprecatedConfig.md -->
+<!-- ========================================== -->
+
+# ClusterMonitoringOperatorDeprecatedConfig
+
+## Meaning
+
+This alert fires when a deprecated config is used in the
+`openshift-monitoring/cluster-monitoring-config` config map.
+
+## Impact
+
+Avoid using a deprecated config because the config has no effect, and doing so
+might cause the `Upgradeable` condition for the Cluster Monitoring Operator
+to become `False` in a future OpenShift Container Platform release.
+
+## Diagnosis
+
+- Check the __Description__ and __Summary__ annotations of the alert to identify
+the deprecated config as shown in the following example:
+
+  __Description__
+
+  `The configuration field k8sPrometheusAdapter in
+  openshift-monitoring/cluster-monitoring-config was deprecated in version 4.16
+  and has no effect`.
+
+  __Summary__
+
+  `Cluster Monitoring Operator is being used with a deprecated configuration.`
+
+## Mitigation
+
+* For the `k8sPrometheusAdapter.dedicatedServiceMonitors`
+field, you can remove the block. For more information, see
+`Monitoring deprecated and removed features` under
+[Deprecated and removed features](https://docs.openshift.com/container-platform/4.16/release_notes/ocp-4-16-release-notes.html#ocp-4-16-deprecated-removed-features_release-notes).
+
+* For the other `k8sPrometheusAdapter` fields, see `Monitoring deprecated and
+removed features` under [Deprecated and removed features](https://docs.openshift.com/container-platform/4.16/release_notes/ocp-4-16-release-notes.html#ocp-4-16-deprecated-removed-features_release-notes).
+You might need to migrate some of the fields under [metricsServer](https://docs.openshift.com/container-platform/latest/observability/monitoring/config-map-reference-for-the-cluster-monitoring-operator.html#metricsserverconfig).
+
+The alert resolves itself when the deprecated config is not used.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\ClusterOperatorDegraded.md -->
+<!-- ========================================== -->
+
+# ClusterOperatorDegraded
+
+## Meaning
+
+The alert `ClusterOperatorDegraded` is triggered by the
+[cluster-version-operator](https://github.com/openshift/cluster-version-operator)
+(CVO) when a `ClusterOperator` is in the `degraded` state for a certain period.
+
+An Operator reports a `Degraded` state when its current state does not
+match the requested state over a period of time, which results in a lower
+quality of service. The period of time varies by component, but a `Degraded`
+state represents the persistent observation of a condition. A service state
+might also be in an `Available` state even when degraded.
+
+For example, a service might request three running pods, but one pod is in a
+crash-loop state. In this case, the service is reported as `Available` but
+`Degraded` because it might have a lower quality of service.
+
+A component might also be reported as `Progressing` but not `Degraded` because
+the change from one state to another does not persist over a long enough
+time period to report a `Degraded` state.
+
+A service does not report a `Degraded` state during a normal upgrade. A service
+might report `Degraded` in response to a persistent infrastructure failure that
+requires administrator intervention--for example, when a control plane host is
+unhealthy and has to be replaced. An Operator reports `Degraded` state
+if unexpected errors occur over a period of time.
+## Impact
+
+This alert indicates that an Operator has encountered an error preventing it
+or its operand from working properly. The operand might still be available,
+but its intent might not be fulfilled, and therefore an outage might occur.
+
+## Diagnosis
+
+The alert message indicates the Operator for which the alert triggered. The
+Operator name is displayed under the `name` label, as shown in the following
+example:
+
+```text
+ - alertname = ClusterOperatorDegraded
+...
+ - name = console
+...
+```
+
+To troubleshoot the issue causing the alert to trigger, use any or all of
+the following methods after logging into the cluster:
+
+* Review the status of all Operators to discover if multiple Operators are
+in a `Degraded` state:
+
+    ```console
+    $ oc get clusteroperator
+    ```
+
+* Review information about the current status of the Operator:
+
+    ```console
+    $ oc get clusteroperator $CLUSTEROPERATOR -ojson | jq .status.conditions
+    ```
+
+* Review the associated resources for the Operator:
+
+    ```console
+    $ oc get clusteroperator $CLUSTEROPERATOR -ojson | jq .status.relatedObjects
+    ```
+
+* Review the logs and other artifacts for the Operator. For example, you can
+collect the logs of a specific Operator and store them in a local directory
+named `out`:
+
+    ```console
+    $ oc adm inspect clusteroperator/$CLUSTEROPERATOR --dest-dir=out
+    ```
+
+## Mitigation
+
+How you resolve the issue causing the `Degraded` state of the Operator varies
+depending on the Operator. If the alert is triggered during an upgrade, the
+`Degraded` state might recover after some time has passed. If an Operator is
+misconfigured, troubleshoot the error by reviewing information about
+the Operator in the logs and fix the configuration based on your findings.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\ClusterOperatorDown.md -->
+<!-- ========================================== -->
+
+# ClusterOperatorDown
+
+## Meaning
+
+The alert `ClusterOperatorDown` is triggered by
+[cluster-version-operator](https://github.com/openshift/cluster-version-operator)
+(CVO) when a `ClusterOperator` is not in the `Available` state for a certain
+period of time. An operand is `Available` when it is functional in the cluster.
+
+## Impact
+
+This alert indicates that an outage has occurred in your cluster. Investigate
+the issue as soon as possible.
+
+## Diagnosis
+
+The alert message provides the name of the Operator that triggered the alert,
+as shown in the following example:
+
+```text
+ - alertname = ClusterOperatorDown
+...
+ - name = console
+...
+```
+
+To troubleshoot the issue causing the alert to trigger, use any or all of
+the following methods after logging into the cluster:
+
+* Review the status of all Operators to discover if multiple Operators are
+down:
+
+    ```console
+    $ oc get clusteroperator
+    ```
+
+* Review information about the current status of the Operator:
+
+    ```console
+    $ oc get clusteroperator $CLUSTEROPERATOR -ojson | jq .status.conditions
+    ```
+
+* Review the associated resources for the Operator:
+
+    ```console
+    $ oc get clusteroperator $CLUSTEROPERATOR -ojson | jq .status.relatedObjects
+    ```
+
+* Review the logs and other artifacts for the Operator. For example, you can
+collect the logs of a specific Operator and store them in a local directory
+named `out`:
+
+    ```console
+    $ oc adm inspect clusteroperator/$CLUSTEROPERATOR --dest-dir=out
+    ```
+
+## Mitigation
+
+How you resolve the issue causing the issue varies depending on the Operator.
+If the alert is triggered during an upgrade, the issue might resolve after some
+time has passed. Otherwise, troubleshoot the error by reviewing information
+about the Operator in the logs and fix the configuration based on your findings.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubeAPIDown.md -->
+<!-- ========================================== -->
+
+# KubeAPIDown
+
+This alert has been moved to [alerts/cluster-kube-apiserver-operator/KubeAPIDown.md](https://github.com/openshift/runbooks/blob/master/alerts/cluster-kube-apiserver-operator/KubeAPIDown.md)
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubeAggregatedAPIErrors.md -->
+<!-- ========================================== -->
+
+# KubeAggregatedAPIErrors
+
+This alert has been moved to [alerts/cluster-kube-apiserver-operator/KubeAggregatedAPIErrors.md](https://github.com/openshift/runbooks/blob/master/alerts/cluster-kube-apiserver-operator/KubeAggregatedAPIErrors.md)
+
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubeDeploymentReplicasMismatch.md -->
+<!-- ========================================== -->
+
+# KubeDeploymentReplicasMismatch
+
+## Meaning
+
+Th `KubeDeploymentReplicasMismatch` alert triggers when, over a certain time
+period, a discrepancy occurs between the desired number of pod replicas for
+deployment and the actual number of running instances.
+
+## Impact
+
+The impact differs depending on the size of the discrepancy.
+
+## Diagnosis
+
+The alert message under the `deployment` label describes where the discrepancy
+occurred:
+
+```console
+ - alertname = KubeDeploymentReplicasMismatch
+...
+ - deployment = elasticsearch-cdm-u1gqqbu6-2
+...
+ - namespace = openshift-logging
+...
+```
+
+Review the current deployment details by examining the items available in
+the alert.
+
+* Start by reviewing the status of the deployment:
+
+    ```console
+    $ oc get deploy -n $NAMESPACE $DEPLOYMENT
+    ```
+
+* Run the following command in the target namespace to review the
+events:
+
+    ```console
+    $ oc get events -n $NAMESPACE
+    ```
+
+* Review the status of the pods that the deployment manages:
+
+    ```console
+    $ oc get pods -n $NAMESPACE --selector=app=$DEPLOYMENT
+    ```
+
+    Possible problems include a pod stuck in a `ContainerCreating` or
+    `CrashLoopBackoff` state.
+
+* The events might also list information about possible failed actions of a
+pod. You can view application and start-up failures by running:
+
+    ```console
+    $ oc describe pod $POD
+    ```
+
+* For pods stuck in a `Pending` state, insufficient resources are
+preventing the pod from being scheduled. Check the health of the nodes:
+
+    ```console
+    $ oc get nodes
+    ```
+
+* Verify whether or not the host has sufficient CPU and memory resources:
+
+    ```console
+    $ oc adm top nodes
+    ```
+
+## Mitigation
+
+After you diagnose the issue, refer to the OpenShift documentation to learn how
+to resolve the problems. You can safely delete the pods because they are
+managed by the deployment. However, you might also need to add more nodes if
+your diagnostic steps showed that the host had insufficient resources.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubeJobFailed.md -->
+<!-- ========================================== -->
+
+# KubeJobFailed
+
+## Meaning
+
+The `KubeJobFailed` alert triggers when the number of job execution attempts
+exceeds the value defined in `backoffLimit`. If this issue occurs, a job can
+create one or many pods for its tasks.
+
+## Impact
+
+A task has not finished correctly. Depending on the task, the severity of the
+impact differs.
+
+## Diagnosis
+
+The alert message contains the job name and the namespace in which that job
+failed. The following message provides an example:
+
+```text
+ - alertname = KubeJobFailed
+...
+ - job_name = elasticsearch-delete-app-1600903800
+ - namespace = openshift-logging
+... 
+ - message = Job openshift-logging/elasticsearch-delete-app-1600855200 failed to complete.
+```
+
+This information is required for you to follow the mitigation steps.
+
+## Mitigation
+
+* Find the pods that belong to the failed job shown in the alert message:
+
+    ```console
+    $ oc get pod -n $NAMESPACE -l job-name=$JOBNAME
+    ```
+
+    If you see an `Error` pod together with a subsequent `Completed` pod of the
+    same base name, the error was transient, and you can safely delete the
+    `Error` pod.
+
+* Review the status of the jobs:
+
+    ```console
+    $ oc get jobs -n $NAMESPACE
+    ```
+
+    If a healthy job exists for every failed job, you can safely delete the
+    failed jobs, and the alert will resolve itself after a few minutes.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubeNodeNotReady.md -->
+<!-- ========================================== -->
+
+# KubeNodeNotReady
+
+## Meaning
+
+The `KubeNodeNotReady` alert triggers when a node is not in a `Ready` state
+over a certain period of time. If this alert triggers, the node cannot host any
+new pods, as described [here][KubeNode].
+
+## Impact
+
+The issue that triggers this alert degrades the performance of the cluster
+deployments. The severity of the degradation depends on the overall workload
+and the type of node.
+
+## Diagnosis
+
+The alert notification message includes the affected node, as shown in the
+following example:
+
+```txt
+ - alertname = KubeNodeNotReady
+...
+ - node = node1.example.com
+...
+```
+
+* Log in to the cluster. Review the status of the node indicated in the alert
+message:
+
+    ```console
+    $ oc get node $NODE -o yaml
+    ```
+
+    The output of this command describes why the node is not ready. For example
+    network issues could be causing timeouts when trying to reach the API or
+    kubelet.
+
+* Check the machine for the node:
+
+    ```console
+    $ oc get -n openshift-machine-api machine $NODE -o yaml
+    ```
+
+* Check the events for the machine API:
+
+    ```console
+    $ oc get -n openshift-machine-api events
+    ```
+
+    If the machine API is not able to replace the node, the machine status and
+    events list will provide the details.
+
+## Mitigation
+
+After you resolve the problem that prevented the machine API from replacing the
+node, the instance is terminated and replaced by the machine API, but only if
+`MachineHealthChecks` are enabled for the nodes. Otherwise, a manual restart is
+required.
+
+[KubeNode]: https://kubernetes.io/docs/concepts/architecture/nodes/#condition
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubePersistentVolumeFillingUp.md -->
+<!-- ========================================== -->
+
+# KubePersistentVolumeFillingUp
+
+## Meaning
+
+This alert fires when a persistent volume in one of the system namespaces has
+less than 3% of its total space remaining. System namespaces include
+`default` and those that have names beginning with `openshift-` or `kube-`.
+## Impact
+
+If a persistent volume used by a system component fills up, the component
+is unlikely to function normally. A full persistent volume can also lead to a
+partial or full cluster outage.
+
+## Diagnosis
+
+The alert labels include the name of the persistent volume claim (PVC)
+associated with the volume running low on storage. The labels also include the
+namespace in which the PVC is located. Use this information to graph
+available storage in the OpenShift web console under Observe -> Metrics.  
+
+The following is an example query for a PVC associated with a Prometheus
+instance in the `openshift-monitoring` namespace:
+
+```text
+kubelet_volume_stats_available_bytes{
+  namespace="openshift-monitoring",
+  persistentvolumeclaim="prometheus-k8s-db-prometheus-k8s-0"
+}
+```
+
+You can also inspect the contents of the volume manually to determine what is
+using the storage:
+
+```console
+$ PVC_NAME='<persistentvolumeclaim label from alert>'
+$ NAMESPACE='<namespace label from alert>'
+
+$ oc -n $NAMESPACE describe pvc $PVC_NAME
+$ POD_NAME='<"Used By:" field from the above output>'
+
+$ oc -n $NAMESPACE rsh $POD_NAME
+$ df -h
+```
+
+## Mitigation
+
+Mitigation for this issue depends on what is filling up the storage.  
+
+You can try allocating more storage space to the affected volume to solve the
+issue.
+
+You can also try adjusting the configuration for the component that is the
+volume so that the component requires less storage space. For example, if logs
+for a component are filling up the persistent volume, you can change the log
+level so that less information is logged and therefore less space is required
+for logs.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubePersistentVolumeInodesFillingUp.md -->
+<!-- ========================================== -->
+
+# KubePersistentVolumeInodesFillingUp
+
+## Meaning
+
+The `KubePersistentVolumeInodesFillingUp` alert triggers when a persistent
+volume in one of the system namespaces has less than 3% of its allocated inodes
+left. System namespaces include `default` and those that have names beginning
+with `openshift-` or `kube-`.
+
+## Impact
+
+Significant inode usage by a system component is likely to prevent the
+component from functioning normally. Signficant inode usage can also lead to a
+partial or full cluster outage.
+
+## Diagnosis
+
+The alert labels include the name of the persistent volume claim (PVC)
+associated with the volume running low on storage. The labels also include the
+namespace in which the PVC is located. Use this information to graph
+available storage in the OpenShift web console under Observe -> Metrics.  
+
+The following is an example query for a PVC associated with a Prometheus
+instance in the `openshift-monitoring` namespace:
+
+```text
+kubelet_volume_stats_inodes_used{
+  namespace="openshift-monitoring",
+  persistentvolumeclaim="prometheus-k8s-db-prometheus-k8s-0"
+}
+```
+
+You can inspect the status of the volume manually to determine which directory
+is consuming a large number of inodes:
+
+```console
+$ PVC_NAME='<persistentvolumeclaim label from alert>'
+$ NAMESPACE='<namespace label from alert>'
+
+$ oc -n $NAMESPACE describe pvc $PVC_NAME
+$ POD_NAME='<"Used By:" field from the above output>'
+
+$ oc -n $NAMESPACE rsh $POD_NAME
+$ cd /path/to/pvc-mount
+$ ls -li .
+$ stat
+```
+
+## Mitigation
+
+Mitigating this issue depends on the total count of files, directories, and
+symbolic links. You cannot expand the number of inodes on a file system after
+the file system has been created. However, you can adjust the configuration for
+the component using the volume so that it creates fewer files, directories, and
+symbolic links.
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubePodNotReady.md -->
+<!-- ========================================== -->
+
+# KubePodNotReady
+
+## Meaning
+
+The `KubePodNotReady` alert triggers when a pod has not been in a
+`Ready` state for a certain time period. This issue can occur for different
+reasons, as described [in the Kubernetes documentation][PodLifecycle]. When a
+pod has a status of `Running` but is not in a `Ready` state, the `Readiness`
+probe is failing. For example, an application-specific error might be
+preventing the pod from being attached to a service. When a pod remains in
+`Pending` state, it cannot be deployed to particular namespaces and nodes.
+
+## Impact
+
+The affected pod is not functional and does not receive any traffic. Depending
+on how many functional replicas are still available, the severity of the impact
+differs.
+
+## Diagnosis
+
+The alert notification message lists the pod that is not ready and the
+namespace in which the pod is located, as shown in the following example alert
+message:
+
+```text
+ - alertname = KubePodNotReady
+...
+ - namespace = openshift-logging
+ - pod = elasticsearch-cdm-u1gqqbu6-2-868ddd4b45-w224d
+...
+```
+
+To diagnose the cause of the issue, start by reviewing the status of the
+affected pod:
+
+```console
+$ oc get pod -n $NAMESPACE $POD
+```
+
+If the pod is in a `Running` state, review the logs for the pod:
+
+```console
+$ oc logs -n $NAMESPACE $POD
+```
+
+Be aware that there might be multiple containers in the pod. If so, review the
+logs for all of these containers. If the pod is not in a `Running` state--for
+instance, if it is stuck in a `ContainerCreating` state--try to find out why.
+
+## Mitigation
+
+The steps you take to fix the issue will depend on the cause that you found when
+you examined the logs.
+
+[PodLifecycle]: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\KubeletDown.md -->
+<!-- ========================================== -->
+
+# KubeletDown
+
+## Meaning
+
+The `KubeletDown` alert is triggered when the monitoring system has not been
+able to reach any of the Kubelets in a cluster for more than 15 minutes.
+
+## Impact
+
+This alert represents a critical threat to the cluster's stability. Excluding
+the possibility of a network issue preventing the monitoring system from
+scraping Kubelet metrics, multiple nodes in the cluster are likely unable to
+respond to configuration changes for pods and other resources, and some
+debugging tools are likely not to be functional, such as `oc exec` and
+`oc logs`.
+
+## Diagnosis
+
+Review the status of the nodes and check for recent events on `Node` or other
+resources:
+
+```console
+$ oc get nodes
+$ oc describe node $NODE_NAME
+$ oc get events --field-selector 'involvedObject.kind=Node'
+$ oc get events
+```
+
+You can [access cluster node journal logs][cluster-node-journal-logs] to review
+the logs for the Kubelet.  If the Kubelet is functional, you can use:
+
+```console
+$ oc adm node-logs --role=master -u kubelet
+```
+
+See `oc adm node-logs --help` for alternative ways to select nodes and filter results.
+
+If the kubelet is not functional and you have SSH access to the nodes,
+use this access to review the logs for the Kubelet:
+
+```console
+$ journalctl -b -f -u kubelet.service
+```
+
+## Mitigation
+
+The mitigation for this alert depends on the issue causing the Kubelets to
+become unresponsive. You can begin by checking for general networking issues or
+for node-level configuration issues.
+
+[cluster-node-journal-logs]: https://docs.openshift.com/container-platform/latest/support/gathering-cluster-data.html#querying-cluster-node-journal-logs_gathering-cluster-data
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\NodeClockNotSynchronising.md -->
+<!-- ========================================== -->
+
+# NodeClockNotSynchronising
+
+## Meaning
+
+The `NodeClockNotSynchronising` alert triggers when a node is affected by
+issues with the NTP server for that node. For example, this alert might trigger
+when certificates are rotated for the API Server on a node, and the
+certificates fail validation because of an invalid time.
+
+
+## Impact
+This alert is critical. It indicates an issue that can lead to the API Server
+Operator becoming degraded or unavailable. If the API Server Operator becomes
+degraded or unavailable, this issue can negatively affect other Operators, such
+as the Cluster Monitoring Operator.
+
+## Diagnosis
+
+To diagnose the underlying issue, start a debug pod on the affected node and
+check the `chronyd` service:
+
+```shell
+oc -n default debug node/<affected_node_name>
+chroot /host
+systemctl status chronyd
+```
+
+## Mitigation
+
+1. If the `chronyd` service is failing or stopped, start it:
+
+    ```shell
+    systemctl start chronyd
+    ```
+    If the chronyd service is ready, restart it
+
+    ```shell
+    systemctl restart chronyd
+    ```
+
+    If `chronyd` starts or restarts successfuly, the service adjusts the clock
+    and displays something similar to the following example output:
+
+    ```shell
+    Oct 18 19:39:36 ip-100-67-47-86 chronyd[2055318]: System clock wrong by 16422.107473 seconds, adjustment started
+    Oct 19 00:13:18 ip-100-67-47-86 chronyd[2055318]: System clock was stepped by 16422.107473 seconds
+    ```
+
+2. Verify that the `chronyd` service is running:
+
+    ```shell
+    systemctl status chronyd
+    ```
+
+3. Verify using PromQL:
+
+    ```console
+    min_over_time(node_timex_sync_status[5m])
+    node_timex_maxerror_seconds
+    ```
+    `node_timex_sync_status` returns `1` if NTP is working properly,or `0` if
+    NTP is not working properly. `node_timex_maxerror_seconds` indicates how
+    many seconds NTP is falling behind.
+
+    The alert triggers when the value for
+    `min_over_time(node_timex_sync_status[5m])` equals `0` and the value for
+    `node_timex_maxerror_seconds` is greater than or equal to `16`.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\NodeFileDescriptorLimit.md -->
+<!-- ========================================== -->
+
+# NodeFileDescriptorLimit
+
+## Meaning
+
+The `NodeFileDescriptorLimit` alert is triggered when a node's kernel is
+running out of available file descriptors. A `warning` level alert triggers at
+greater than 70% usage, and a `critical` level alert triggers at greater than
+90% usage.
+
+## Impact
+
+Applications on the node might no longer be able to open and operate on
+files, which is likely to have severe negative consequences for anything
+scheduled on this node.
+
+## Diagnosis
+
+Open a shell on the node and use standard Linux utilities to diagnose the issue:
+
+```console
+$ NODE_NAME='<value of instance label from alert>'
+
+$ oc debug "node/$NODE_NAME"
+# sysctl -a | grep 'fs.file-'
+fs.file-max = 1597016
+fs.file-nr = 7104       0       1597016
+# lsof -n
+```
+
+## Mitigation
+
+Reduce the number of files opened simultaneously either by adjusting application
+configuration or by moving some applications to other nodes.
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\NodeFilesystemAlmostOutOfFiles.md -->
+<!-- ========================================== -->
+
+# NodeFilesystemAlmostOutOfFiles
+
+## Meaning
+
+The `NodeFilesystemAlmostOutOfFiles` alert is similar to the
+[NodeFilesystemSpaceFillingUp][1] alert, but rather
+than being based on a prediction that a filesystem will run out of inodes in a
+certain amount of time, it uses simple static thresholds. The alert triggers
+at a `warning` level when 5% of available inodes remain, and triggers at a
+`critical` level when 3% of available inodes remain.
+
+## Impact
+
+When a node's filesystem becomes full, it has a widespread impact. This issue
+can cause any or all of the applications scheduled to that node to experience
+anything from degraded performance to becoming fully inoperable. Depending on
+the node and filesystem involved, this issue could pose a critical threat to
+the stability of the cluster.
+
+## Diagnosis
+
+Refer to the [NodeFilesystemFilesFillingUp][1] runbook.
+
+## Mitigation
+
+Refer to the [NodeFilesystemFilesFillingUp][1] runbook.
+
+[1]: https://github.com/openshift/runbooks/blob/master/alerts/cluster-monitoring-operator/NodeFilesystemFilesFillingUp.md
+
+
+
+<!-- ========================================== -->
+<!-- Source Path: alerts\cluster-monitoring-operator\NodeFilesystemAlmostOutOfSpace.md -->
+<!-- ========================================== -->
+
+# NodeFilesystemAlmostOutOfSpace
+
+## Meaning
+
+The `NodeFilesystemAlmostOutOfSpace` alert is similar to the
+[NodeFilesystemSpaceFillingUp][1] alert, but rather
+than being based on a prediction that a file system will become full in a
+certain amount of time, it uses simple static thresholds. This alert triggers
+at a `warning` level when 5% of space remains in the file system, and at a
+`critical` level when 3% of space remains.
+
+## Impact
+
+A node's file system becoming full can have a widespread negative impact. This
+issue can cause any or all of the applications scheduled to that node to
+experience anything from degraded performance to becoming fully inoperable.
+Depending on the node and file system involved, this issue can pose a critical
+threat to the stability of the cluster.
+
+## Diagnosis
+
+Refer to the [NodeFilesystemSpaceFillingUp][1] runbook.
+
+## Mitigation
+
+Refer to the [NodeFilesystemSpaceFillingUp][1] runbook.
+
+[1]: https://github.com/openshift/runbooks/blob/master/alerts/cluster-monitoring-operator/NodeFilesystemSpaceFillingUp.md
+
+
+
